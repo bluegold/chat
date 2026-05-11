@@ -1,48 +1,47 @@
-# Ruby Ractor + OpenAI API Chat CLI 設計
+# Ruby Thread + OpenAI API Chat CLI 設計
 
 ## アーキテクチャ概要
 
 ```
-┌──────────────┐
-│ Main Ractor  │ ← 入力受付・コマンド処理・セッション管理
-└──────┬───────┘
-       │ ユーザー入力
-       ▼
++--------------+
+|  Main Thread | <- 入力受付・コマンド処理・セッション管理
++------+-------+
+       | ユーザー入力
+       v
    ユーザー
 
-┌─────────────────────────────────┐
-│         メッセージフロー          │
-├─────────────────────────────────┤
-│                                 │
-│  Main Ractor ─コマンド結果──→   │
-│              ↓                 │
-│       Session Ractor            │
-│              ↓                 │
-│       API レスポンス            │
-│              ↓                 │
-│       Output Ractor ─→ 画面    │
-│                                 │
-└─────────────────────────────────┘
-```
++---------------------------------------+
+|           メッセージフロー              |
++---------------------------------------+
+                                       |
+|  Main Thread ---コマンド結果--->        |
+|              v                        |
+|       Session Thread                  |
+|              v                        |
+|       API レスポンス                   |
+|              v                        |
+|       Output Thread ---> 画面          |
+                                       |
++---------------------------------------+
 
-## Ractor の責務
+## Thread の責務
 
-### Main Ractor
+### Main Thread
 - ユーザー入力の受付
 - コマンド処理（/new, /switch, /list, /exit）
 - セッションの作成・切り替え・削除
-- Session Ractor へのメッセージ転送
-- コマンド実行結果を Output Ractor に送信
+- Session Thread へのメッセージ転送（Queue経由）
+- コマンド実行結果を Output Thread に送信（Queue経由）
 
-### Session Ractor（単一）
+### Session Thread（単一）
 - メッセージ履歴の維持
-- OpenAI API リクエストの実行
+- OpenAI API リクエストの実行（ruby-openai gem使用）
 - レスポンスの処理と履歴への追加
-- API レスポンスを Output Ractor に送信
+- API レスポンスを Output Thread に送信（Queue経由）
 
-### Output Ractor
+### Output Thread
 - メッセージの整形・フォーマット
-- 出力順序の制御
+- 出力順序の制御（Queueから順次取り出し）
 - ストリーミング出力のバッファリング
 - 色付け・装飾の適用
 - エラー表示
@@ -52,42 +51,42 @@
 ### ユーザーメッセージ送信
 ```
 ユーザー "Hello"
-  ↓
-Main Ractor（入力受付）
-  ↓ Ractor.send({type: :user_message, content: "Hello"})
-Session Ractor
-  ↓ 履歴追加 [{role: :user, content: "Hello"}]
-  ↓ API リクエスト（net/http）
+  v
+Main Thread（入力受付）
+  v input_queue.push({type: :user_message, content: "Hello"})
+Session Thread（input_queue.pop）
+  v 履歴追加 [{role: :user, content: "Hello"}]
+  v API リクエスト（ruby-openai gem）
 OpenAI API
-  ↓ レスポンス "Hi!"
-Session Ractor
-  ↓ 履歴追加 [{role: :assistant, content: "Hi!"}]
-  ↓ Ractor.send({type: :chat_response, content: "Hi!"})
-Output Ractor
-  ↓ 整形・出力
+  v レスポンス "Hi!"
+Session Thread
+  v 履歴追加 [{role: :assistant, content: "Hi!"}]
+  v output_queue.push({type: :chat_response, content: "Hi!"})
+Output Thread（output_queue.pop）
+  v 整形・出力
 画面: "Assistant: Hi!"
 ```
 
 ### コマンド実行
 ```
 ユーザー "/list"
-  ↓
-Main Ractor（コマンド処理）
-  ↓ Ractor.send({type: :system_message, content: "Sessions: ..."})
-Output Ractor
-  ↓ 整形・出力
+  v
+Main Thread（コマンド処理）
+  v output_queue.push({type: :system_message, content: "Sessions: ..."})
+Output Thread（output_queue.pop）
+  v 整形・出力
 画面: "System: Sessions: ..."
 ```
 
 ### ストリーミング出力
 ```
-Session Ractor（チャンク受信）
-  ↓ チャンク1: "I think"
-  ↓ チャンク2: " the answer"
-  ↓ チャンク3: " is 42"
-Output Ractor
-  ↓ バッファリング & 整形
-  ↓ オプション: 逐次表示 or 一括表示
+Session Thread（チャンク受信）
+  v チャンク1: "I think"
+  v チャンク2: " the answer"
+  v チャンク3: " is 42"
+Output Thread（output_queue.pop）
+  v バッファリング & 整形
+  v オプション: 逐次表示 or 一括表示
 画面: "Assistant: I think the answer is 42"
 ```
 
@@ -123,23 +122,24 @@ Output Ractor
 }
 ```
 
-### Ractor 間メッセージ
+### Thread 間メッセージ（Queue経由）
 
-#### Main → Session
+#### Main → Session（input_queue）
 ```ruby
 {type: :user_message, content: String}
 {type: :get_history}
 {type: :clear_history}
+{type: :shutdown}
 ```
 
-#### Session → Output
+#### Session → Output（output_queue）
 ```ruby
 {type: :chat_response, content: String}
 {type: :stream_chunk, content: String}
 {type: :error, message: String}
 ```
 
-#### Main → Output
+#### Main → Output（output_queue）
 ```ruby
 {type: :system_message, content: String}
 ```
@@ -147,25 +147,32 @@ Output Ractor
 ## クラス設計
 
 ```ruby
+require 'thread'
+require 'openai'
+
 # メインコントローラ
 class ChatCLI
   def initialize(api_key, model = "gpt-4o-mini")
     @api_key = api_key
     @model = model
-    @sessions = {}  # id => Session
-    @current_session_id = nil
-    @main_ractor = Ractor.new { main_loop }
-    @output_ractor = OutputRactor.start
+    @input_queue = Queue.new  # Main → Session
+    @output_queue = Queue.new # Main/Session → Output
+    @shutdown = false
+
+    # Thread を開始
+    @session_thread = SessionThread.new(@input_queue, @output_queue, api_key, model)
+    @output_thread = OutputThread.new(@output_queue)
   end
 
   def run
-    @main_ractor.take
+    main_loop
+    shutdown
   end
 
   private
 
   def main_loop
-    loop do
+    until @shutdown
       print_prompt
       input = $stdin.gets&.chomp
       break if input.nil? || input == "/exit"
@@ -176,25 +183,41 @@ class ChatCLI
         send_to_session(input)
       end
     end
-    @output_ractor.send({type: :system_message, content: "Goodbye!"})
   end
 
   def handle_command(input)
     case input
-    when "/new"
-      create_new_session
     when "/list"
       list_sessions
     when "/clear"
       clear_history
+    when "/history"
+      show_history
     else
-      @output_ractor.send({type: :error, message: "Unknown command: #{input}"})
+      @output_queue.push({type: :error, message: "Unknown command: #{input}"})
     end
   end
 
   def send_to_session(content)
-    @output_ractor.send({type: :system_message, content: "You: #{content}"})
-    # Session Ractor に送信
+    @output_queue.push({type: :system_message, content: "You: #{content}"})
+    @input_queue.push({type: :user_message, content: content})
+  end
+
+  def clear_history
+    @input_queue.push({type: :clear_history})
+  end
+
+  def show_history
+    @input_queue.push({type: :get_history})
+  end
+
+  def shutdown
+    @shutdown = true
+    @input_queue.push({type: :shutdown})
+    @session_thread.join
+    @output_thread.push({type: :shutdown})
+    @output_thread.join
+    @output_queue.push({type: :system_message, content: "Goodbye!"})
   end
 
   def print_prompt
@@ -202,75 +225,92 @@ class ChatCLI
   end
 end
 
-# セッション管理 Ractor
-class SessionRactor
-  def self.start(api_key, model)
-    Ractor.new(api_key, model) do |api_key, model|
-      history = []
-      output_ractor = OutputRactor.instance
+# セッション管理 Thread
+class SessionThread
+  def initialize(input_queue, output_queue, api_key, model)
+    @input_queue = input_queue
+    @output_queue = output_queue
+    @client = OpenAI::Client.new(access_token: api_key)
+    @model = model
+    @history = []
 
-      loop do
-        msg = Ractor.receive
+    @thread = Thread.new { run }
+  end
+
+  def join
+    @thread.join
+  end
+
+  private
+
+  def run
+    loop do
+      msg = @input_queue.pop
+      break if msg[:type] == :shutdown
+
+      begin
         case msg[:type]
         when :user_message
-          history << {role: :user, content: msg[:content]}
-          response = OpenAIClient.chat(history, api_key, model)
-          if response[:error]
-            output_ractor.send({type: :error, message: response[:error]})
-          else
-            history << {role: :assistant, content: response[:content]}
-            output_ractor.send({type: :chat_response, content: response[:content]})
-          end
+          handle_user_message(msg[:content])
         when :get_history
-          # 履歴を返却
+          handle_get_history
         when :clear_history
-          history = []
+          @history = []
+          @output_queue.push({type: :system_message, content: "History cleared"})
         end
+      rescue => e
+        @output_queue.push({type: :error, message: e.message})
       end
     end
   end
-end
 
-# OpenAI API クライアント（Ractor 内で使用）
-module OpenAIClient
-  API_ENDPOINT = "https://api.openai.com/v1/chat/completions"
+  def handle_user_message(content)
+    @history << {role: "user", content: content}
 
-  def self.chat(messages, api_key, model)
-    uri = URI(API_ENDPOINT)
-    https = Net::HTTP.new(uri.host, uri.port)
-    https.use_ssl = true
+    response = @client.chat(
+      parameters: {
+        model: @model,
+        messages: @history
+      }
+    )
 
-    request = Net::HTTP::Post.new(uri.path)
-    request["Content-Type"] = "application/json"
-    request["Authorization"] = "Bearer #{api_key}"
-
-    body = {
-      model: model,
-      messages: messages.map { |m| {role: m[:role].to_s, content: m[:content]} }
-    }
-    request.body = body.to_json
-
-    response = https.request(request)
-
-    if response.code == "200"
-      data = JSON.parse(response.body)
-      {content: data["choices"][0]["message"]["content"]}
+    if response["error"]
+      @output_queue.push({type: :error, message: response["error"]["message"]})
     else
-      {error: "API Error: #{response.code} - #{response.body}"}
+      assistant_message = response.dig("choices", 0, "message", "content")
+      @history << {role: "assistant", content: assistant_message}
+      @output_queue.push({type: :chat_response, content: assistant_message})
     end
-  rescue => e
-    {error: e.message}
+  end
+
+  def handle_get_history
+    @output_queue.push({type: :system_message, content: format_history})
+  end
+
+  def format_history
+    @history.map { |m| "#{m[:role].capitalize}: #{m[:content]}" }.join("\n")
   end
 end
 
-# 出力管理 Ractor
-class OutputRactor
-  @instance = nil
+# 出力管理 Thread
+class OutputThread
+  def initialize(output_queue)
+    @output_queue = output_queue
+    @thread = Thread.new { run }
+  end
 
-  def self.start
-    @instance ||= Ractor.new do
-      loop do
-        msg = Ractor.receive
+  def join
+    @thread.join
+  end
+
+  private
+
+  def run
+    loop do
+      msg = @output_queue.pop
+      break if msg[:type] == :shutdown
+
+      begin
         case msg[:type]
         when :chat_response
           print_chat(msg[:content])
@@ -281,75 +321,75 @@ class OutputRactor
         when :error
           print_error(msg[:content])
         end
+      rescue => e
+        STDERR.puts "Output error: #{e.message}"
       end
     end
   end
 
-  def self.instance
-    @instance
-  end
-
-  private
-
-  def self.print_chat(content)
+  def print_chat(content)
     puts "\e[32mAssistant\e[0m: #{content}"
   end
 
-  def self.print_system(content)
+  def print_system(content)
     puts "\e[33mSystem\e[0m: #{content}"
   end
 
-  def self.print_error(content)
+  def print_error(content)
     puts "\e[31mError\e[0m: #{content}"
   end
 
-  def self.print_stream_chunk(content)
+  def print_stream_chunk(content)
     print content
     $stdout.flush
   end
 end
 ```
 
-## 技術的制約と対応
+## 技術的仕様
 
-### Ractor の制約
-- **共有メモリなし**：全てメッセージパッシングで通信
-- **非共有オブジェクトのみ**：`Ractor.make_shareable` を使用
-- **外部ライブラリ**：スレッドセーフなもののみ使用可能（net/http は OK）
+### Thread の特徴
+- **共有メモリあり**：ミューテックス（Mutex）で保護可能
+- **Queue による通信**：スレッドセーフなキューでメッセージパッシング
+- **外部ライブラリ使用可能**：ruby-openai gem などが使用可能
+- **デバッグ容易**：Thread.report_on_exception = true で例外を通知
 
 ### 対応策
-- Session Ractor 間でデータを共有しない
-- メッセージオブジェクトは基本型のみ使用（String, Integer, Array, Hash）
-- API クライアントは Ractor 内でインスタンス化
-- エラー処理は `Ractor::Error` をキャッチ
+- Queue を使用して Thread 間通信（ミューテックス不要）
+- ruby-openai gem を使用して API クライアントを実装
+- 各 Thread で例外を rescue してエラーメッセージを Queue に送信
+- shutdown フラグで Thread を正常終了
 
 ## 並列化のメリット
 
 1. **非ブロッキング操作**：API リクエスト中も他の操作が可能
-2. **フォールトトレランス**：Session Ractor がクラッシュしても Main/Output Ractor には影響なし
-3. **責任分離**：各 Ractor が独立した責務を持つ
-4. **スケーラビリティ**：必要に応じて Session Ractor を複数化可能
+2. **フォールトトレランス**：Session Thread がクラッシュしても Main/Output Thread には影響なし（例外処理で対応）
+3. **責任分離**：各 Thread が独立した責務を持つ
+4. **柔軟性**：共有メモリが使えるので、将来の機能追加が容易
+5. **成熟した技術**：Thread は長く使われている技術で、情報やツールが豊富
 
 ## 実装の優先順位
 
 1. **フェーズ1**: 基本的な対話機能
-   - Main Ractor + Session Ractor + Output Ractor
+   - Main Thread + Session Thread + Output Thread
    - ユーザー入力 → API レスポンス → 表示
+   - Queue による通信
 
 2. **フェーズ2**: コマンド機能
-   - /new, /list, /clear, /exit
-   - セッション管理
+   - /list, /clear, /history, /exit
+   - 履歴管理
 
 3. **フェーズ3**: ストリーミング対応
+   - ruby-openai のストリーミングオプションを使用
    - チャンクごとの受信と表示
 
 4. **フェーズ4**: 永続化
-   - セッション履歴の保存・読み込み
+   - セッション履歴の保存・読み込み（JSONファイル）
 
 5. **フェーズ5**: 高度な機能
    - ファイル添付
-   - ツール呼び出し
-   - カスタムプロンプト
+   - ツール呼び出し（Function Calling）
+   - カスタムプロンプトテンプレート
 
 ## 環境変数
 
@@ -366,8 +406,18 @@ ruby chat.rb
 
 ## 依存ライブラリ
 
-- Ruby 3.0 以上（Ractor 対応）
-- net/http（標準ライブラリ）
+- Ruby 2.7 以上（Thread は 1.9 から対応、Queue は標準）
+- ruby-openai gem（OpenAI API クライアント）
 - json（標準ライブラリ）
 
-※ 外部ライブラリ（ruby-openai など）は使用せず、net/http で直接 API を呼び出す
+### Gemfile
+```ruby
+gem 'ruby-openai'
+```
+
+### インストール
+```bash
+bundle install
+# または
+gem install ruby-openai
+```

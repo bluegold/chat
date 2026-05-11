@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
-source "https://rubygems.org"
+source 'https://rubygems.org'
 
-gem "ruby_llm", "~> 1.15"
+gem 'ruby_llm'
+gem 'reline'

@@ -1,0 +1,36 @@
+# Environment configuration
+.envrc
+.env.local
+
+# Personal prompts
+.system_prompt
+
+# History file
+.chat_history
+
+# Ruby
+*.gem
+*.rbc
+.bundle
+.config
+coverage
+InstalledFiles
+lib/bundler/man
+pkg
+rdoc
+spec/reports
+test/tmp
+test/version_tmp
+tmp
+
+# YARD artifacts
+.yardoc
+_yardoc
+doc/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
