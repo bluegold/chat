@@ -9,14 +9,15 @@ module ChatAppLauncher
   def run(argv: ARGV, env: ENV)
     ui = resolve_ui(argv, env)
     api_key = resolve_api_key(env)
-    model = env.fetch('OPENAI_MODEL', 'gpt-4o-mini')
+    agent_registry = resolve_agent_registry(env)
+    agent_name = resolve_agent_name(env, agent_registry)
 
     case ui
     when 'reline'
-      ChatApp::RelineUI.new(api_key, model).run
+      ChatApp::RelineUI.new(api_key, agent_registry: agent_registry, agent_name: agent_name).run
     when 'curses'
       require_relative 'chat_curses_ui'
-      ChatApp::CursesUI.new(api_key, model: model).run
+      ChatApp::CursesUI.new(api_key, agent_registry: agent_registry, agent_name: agent_name).run
     else
       abort "Error: unknown UI #{ui.inspect} (use reline or curses)"
     end
@@ -51,13 +52,26 @@ module ChatAppLauncher
     abort 'Error: OPENAI_API_KEY environment variable is not set'
   end
 
+  def resolve_agent_registry(env)
+    ChatBackend::AgentRegistry.load(path: ChatBackend::AgentRegistry.default_path(env), env: env)
+  end
+
+  def resolve_agent_name(env, registry)
+    agent_name = env.fetch('CHAT_AGENT', registry.default_agent_name)
+    return agent_name if registry[agent_name]
+
+    abort "Error: unknown agent #{agent_name.inspect} (available: #{registry.names.join(', ')})"
+  end
+
   def print_usage
     puts <<~USAGE
       Usage: ruby chat.rb [--ui reline|curses]
 
       Environment:
         CHAT_UI=reline|curses
+        CHAT_AGENT=<name>
         OPENAI_API_KEY or ZAI_API_KEY
+        MYAGENT_CONFIG=~/.config/myagent.yml
         OPENAI_MODEL
     USAGE
   end

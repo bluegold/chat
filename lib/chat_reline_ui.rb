@@ -3,38 +3,31 @@
 require 'io/console'
 require 'reline'
 require_relative 'chat_backend'
+require_relative 'chat_agent_controls'
+require_relative 'chat_command_completion'
 
 Thread.report_on_exception = true
 
 module ChatApp
   class RelineUI
     include ChatBackend::TextLayout
+    include AgentControls
+    include CommandCompletion
 
     HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
     MAX_HISTORY = 1000
 
-    def initialize(api_key, model = 'gpt-4o-mini')
+    def initialize(api_key, agent_registry:, agent_name:)
       @api_key = api_key
-      @model = model
+      @agent_registry = agent_registry
+      @agent_name = agent_name.to_s
       @input_queue = Queue.new
       @output_queue = Queue.new
       @shutdown = false
-      @system_prompt = load_system_prompt
-      @status = ChatBackend::Status.new
-      @transcript = ChatBackend::Transcript.new
       @history_store = ChatBackend::HistoryStore.new(path: HISTORY_FILE, max_entries: MAX_HISTORY)
       load_history_into_reline
-
-      session_config = ChatBackend::SessionConfig.new(
-        input_queue: @input_queue,
-        output_queue: @output_queue,
-        api_key: api_key,
-        model: model,
-        system_prompt: @system_prompt,
-        response_sync: @status,
-        llm: RubyLLM
-      )
-      @session_thread = ChatBackend::SessionThread.new(session_config)
+      start_session(@agent_name)
+      install_completion
     end
 
     def run
@@ -75,6 +68,12 @@ module ChatApp
     end
 
     def submit_input(content)
+      if agent_command?(content)
+        agent_name = agent_name_from_command(content)
+        select_agent(agent_name)
+        return
+      end
+
       @history_store.add(content)
       Reline::HISTORY.push(content)
       @transcript.user_message(content)
@@ -99,8 +98,8 @@ module ChatApp
 
     def shutdown
       @shutdown = true
-      @input_queue.push(type: :shutdown)
-      @session_thread&.join
+      restore_completion
+      shutdown_session
       print "\e[?25h"
       puts
     rescue StandardError
@@ -120,6 +119,53 @@ module ChatApp
       @transcript.apply_output_message(msg)
     end
 
+    def start_session(agent_name)
+      agent = resolve_agent(agent_name)
+      @agent = agent
+      @model = agent.model
+      @system_prompt = agent.system_prompt
+      @status = ChatBackend::Status.new
+      @transcript = ChatBackend::Transcript.new
+      @input_queue = Queue.new
+      @output_queue = Queue.new
+
+      session_config = ChatBackend::SessionConfig.new(
+        input_queue: @input_queue,
+        output_queue: @output_queue,
+        api_key: @api_key,
+        agent: agent,
+        response_sync: @status,
+        llm: RubyLLM
+      )
+      @session_thread = ChatBackend::SessionThread.new(session_config)
+    end
+
+    def select_agent(agent_name)
+      agent_name = agent_name.to_s.strip
+      return if agent_name.empty?
+
+      agent = @agent_registry[agent_name]
+      unless agent
+        @notice_message = "unknown agent: #{agent_name}"
+        return
+      end
+
+      return if @agent&.name == agent.name
+
+      shutdown_session
+      start_session(agent.name)
+      @notice_message = "switched to #{agent.name}"
+    end
+
+    def shutdown_session
+      return unless @session_thread
+
+      @input_queue.push(type: :shutdown)
+      @session_thread.join
+    rescue StandardError
+      nil
+    end
+
     def render
       rows, cols = terminal_size
       lines = build_screen_lines(rows, cols)
@@ -136,7 +182,7 @@ module ChatApp
       rows, cols = terminal_size
       return if rows <= 0 || cols <= 0
 
-      status_line = "  #{prompt}"
+      status_line = prompt
       print "\e[#{rows - 1};1H"
       print "\e[K"
       print truncate_to_width(status_line, cols)
@@ -159,9 +205,10 @@ module ChatApp
     end
 
     def header_line(cols)
-      status = response_pending? ? 'thinking...' : 'ready'
-      prompt_state = @system_prompt && !@system_prompt.strip.empty? ? 'system prompt loaded' : 'no system prompt'
-      truncate_to_width("RubyLLM Chat | model: #{@model} | #{status} | #{prompt_state}", cols)
+      agent_state = "agent: #{@agent&.label || @agent_name}"
+      parts = ["RubyLLM Chat", agent_state, "model: #{@model}", "status: #{status_code}"]
+      parts << @notice_message if @notice_message
+      truncate_to_width(parts.join(' | '), cols)
     end
 
     def response_pending?
@@ -193,13 +240,33 @@ module ChatApp
     end
 
     def load_system_prompt
-      system_prompt_file = File.join(Dir.pwd, '.system_prompt')
-      return nil unless File.exist?(system_prompt_file)
+      @agent&.system_prompt
+    end
 
-      content = File.read(system_prompt_file)
-      content.strip.empty? ? nil : content
+    def install_completion
+      @previous_completion_proc = Reline.completion_proc
+      @previous_completion_append_character = Reline.completion_append_character
+      Reline.completion_proc = method(:reline_completion_candidates)
+      Reline.completion_append_character = nil
     rescue StandardError
-      nil
+      # Completion is a best-effort enhancement.
+    end
+
+    def restore_completion
+      Reline.completion_proc = @previous_completion_proc
+      Reline.completion_append_character = @previous_completion_append_character
+    rescue StandardError
+      # Resetting completion should not break shutdown.
+    end
+
+    def reline_completion_candidates
+      command_completion_candidates(
+        buffer: Reline.line_buffer,
+        cursor: Reline.point,
+        agent_names: @agent_registry.names
+      )
+    rescue StandardError
+      []
     end
   end
 end

@@ -1,30 +1,36 @@
 # frozen_string_literal: true
 
 require_relative 'chat_backend'
+require_relative 'chat_agent_controls'
+require_relative 'chat_command_completion'
 require_relative 'chat_curses_mouse'
+require_relative 'chat_scroll_controls'
+require_relative 'chat_session_status'
 
 Thread.report_on_exception = true
 
 module ChatApp
   class CursesSession
     include ChatBackend::TextLayout
+    include AgentControls
+    include CommandCompletion
     include CursesMouse
+    include ScrollControls
+    include SessionStatus
 
     HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
     MAX_HISTORY = 1000
-
     attr_reader :status, :transcript, :session_thread, :input_queue, :output_queue, :history_store,
                 :model, :system_prompt, :input_buffer, :input_cursor, :transcript_scroll,
-                :mouse_debug
+                :mouse_debug, :agent, :agent_name, :agent_registry
     attr_accessor :transcript_visible_height
 
-    def initialize(api_key, model:, system_prompt:, debug_mouse_enabled:, llm: RubyLLM)
-      @model = model
-      @system_prompt = system_prompt
-      @status = ChatBackend::Status.new
-      @transcript = ChatBackend::Transcript.new
-      @input_queue = Queue.new
-      @output_queue = Queue.new
+    def initialize(api_key, agent_registry:, agent_name:, debug_mouse_enabled:, llm: RubyLLM)
+      @api_key = api_key
+      @agent_registry = agent_registry
+      @agent_name = agent_name.to_s
+      @debug_mouse_enabled = debug_mouse_enabled
+      @llm = llm
       @history_store = ChatBackend::HistoryStore.new(path: HISTORY_FILE, max_entries: MAX_HISTORY)
       @input_history = @history_store.to_a
       @history_index = -1
@@ -34,20 +40,10 @@ module ChatApp
       @transcript_scroll = 0
       @transcript_visible_height = 0
       @mouse_debug = nil
-      @debug_mouse_enabled = debug_mouse_enabled
+      @notice_message = nil
       @running = true
 
-      @session_thread = ChatBackend::SessionThread.new(
-        ChatBackend::SessionConfig.new(
-          input_queue: @input_queue,
-          output_queue: @output_queue,
-          api_key: api_key,
-          model: model,
-          system_prompt: @system_prompt,
-          response_sync: @status,
-          llm: llm
-        )
-      )
+      start_session(@agent_name)
     end
 
     def running?
@@ -70,6 +66,8 @@ module ChatApp
         scroll_transcript(-page_scroll_amount)
       when :mouse
         handle_mouse_event
+      when :tab
+        complete_input(agent_names: @agent_registry.names)
       when :enter
         submit_input
       when :quit
@@ -90,15 +88,26 @@ module ChatApp
 
     def shutdown
       @running = false
-      @input_queue.push(type: :shutdown)
-      @session_thread.join(0.5)
-      @session_thread.kill if @session_thread.alive?
+      shutdown_session
     rescue StandardError
       # Nothing else to do on shutdown.
     end
 
-    def response_pending?
-      @status.pending? || @status.streaming?
+    def select_agent(name)
+      agent_name = name.to_s.strip
+      return if agent_name.empty?
+
+      agent = @agent_registry[agent_name]
+      unless agent
+        @notice_message = "unknown agent: #{agent_name}"
+        return
+      end
+
+      return if @agent&.name == agent.name
+
+      shutdown_session
+      start_session(agent.name)
+      @notice_message = "switched to #{agent.name}"
     end
 
     def input_viewport(available_width)
@@ -134,17 +143,6 @@ module ChatApp
       end
 
       [visible, cursor_x]
-    end
-
-    def status_line
-      status = response_pending? ? 'thinking...' : 'ready'
-      prompt_state = @system_prompt && !@system_prompt.strip.empty? ? 'system prompt loaded' : 'no system prompt'
-      scroll_value = @transcript_scroll.to_i
-      scroll_state = scroll_value.positive? ? "scroll: #{scroll_value}" : 'scroll: bottom'
-      mouse_state = @debug_mouse_enabled ? (@mouse_debug || 'mouse: -') : nil
-      parts = ["model: #{@model}", status, prompt_state, scroll_state]
-      parts << mouse_state if mouse_state
-      parts.join(' | ')
     end
 
     private
@@ -189,11 +187,21 @@ module ChatApp
       return if text.strip.empty?
       return if response_pending?
 
+      if agent_command?(text)
+        select_agent(agent_name_from_command(text))
+        @input_buffer = +''
+        @input_cursor = 0
+        @history_index = -1
+        @history_draft = nil
+        return
+      end
+
       @transcript.user_message(text)
       stored = @history_store.add(text)
       @input_history << stored if stored
       @input_history = @input_history.last(@history_store.max_entries)
       @input_queue.push(type: :user_message, content: text)
+      @notice_message = nil
 
       @input_buffer = +''
       @input_cursor = 0
@@ -258,23 +266,38 @@ module ChatApp
       @input_buffer = chars.join
     end
 
-    def scroll_transcript(delta)
-      @transcript_scroll = [@transcript_scroll + delta, 0].max
+    def start_session(agent_name)
+      @agent = @agent_registry[agent_name] || @agent_registry.default_agent
+      raise ArgumentError, "unknown agent #{agent_name.inspect}" unless @agent
+
+      @agent_name = @agent.name
+      @model = @agent.model
+      @system_prompt = @agent.system_prompt
+      @status = ChatBackend::Status.new
+      @transcript = ChatBackend::Transcript.new
+      @input_queue = Queue.new
+      @output_queue = Queue.new
+
+      @session_thread = ChatBackend::SessionThread.new(
+        ChatBackend::SessionConfig.new(
+          input_queue: @input_queue,
+          output_queue: @output_queue,
+          api_key: @api_key,
+          agent: @agent,
+          response_sync: @status,
+          llm: @llm
+        )
+      )
     end
 
-    def scroll_to_bottom
-      @transcript_scroll = 0
-    end
+    def shutdown_session
+      return unless @session_thread
 
-    def page_scroll_amount
-      height = @transcript_visible_height.to_i
-      return 8 if height <= 0
-
-      [height - 1, 8].max
-    end
-
-    def wheel_scroll_amount
-      4
+      @input_queue.push(type: :shutdown)
+      @session_thread.join(0.5)
+      @session_thread.kill if @session_thread.alive?
+    rescue StandardError
+      nil
     end
   end
 end

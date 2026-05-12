@@ -4,6 +4,7 @@ require 'minitest/autorun'
 require 'tmpdir'
 
 require_relative '../lib/chat_backend'
+require_relative '../lib/chat_command_completion'
 
 class ChatBackendHistoryStoreTest < Minitest::Test
   def test_history_store_persists_entries_and_trims_old_values
@@ -155,13 +156,35 @@ class ChatBackendStatusTest < Minitest::Test
 end
 
 class ChatBackendSessionConfigTest < Minitest::Test
+  def test_agent_spec_exposes_metadata
+    spec = ChatBackend::AgentSpec.new(
+      name: 'coder',
+      display_name: 'ChatGPT',
+      model: 'gpt-4o-mini',
+      system_prompt: 'Be brief',
+      temperature: 0.8,
+      tools: %w[search files]
+    )
+
+    assert_equal 'ChatGPT', spec.label
+    assert_equal %w[search files], spec.tool_names
+  end
+
   def test_session_config_wraps_backend_dependencies
+    agent = ChatBackend::AgentSpec.new(
+      name: 'default',
+      display_name: nil,
+      model: 'test-model',
+      system_prompt: 'Be brief',
+      temperature: 0.2,
+      tools: []
+    )
+
     config = ChatBackend::SessionConfig.new(
       input_queue: Queue.new,
       output_queue: Queue.new,
       api_key: 'test-key',
-      model: 'test-model',
-      system_prompt: 'Be brief',
+      agent: agent,
       response_sync: ChatBackend::Status.new,
       llm: nil
     )
@@ -171,27 +194,127 @@ class ChatBackendSessionConfigTest < Minitest::Test
         input_queue: config.input_queue,
         output_queue: config.output_queue,
         api_key: 'test-key',
-        model: 'test-model',
-        system_prompt: 'Be brief',
+        agent: agent,
         response_sync: config.response_sync,
         llm: nil
       },
       config.to_h
     )
+    assert_in_delta 0.2, config.temperature, 0.0001
   end
 
   def test_session_config_defaults_llm_client_to_ruby_llm
+    agent = ChatBackend::AgentSpec.new(
+      name: 'default',
+      display_name: nil,
+      model: 'test-model',
+      system_prompt: nil,
+      temperature: nil,
+      tools: []
+    )
+
     config = ChatBackend::SessionConfig.new(
       input_queue: Queue.new,
       output_queue: Queue.new,
       api_key: 'test-key',
-      model: 'test-model',
-      system_prompt: nil,
+      agent: agent,
       response_sync: nil,
       llm: nil
     )
 
     assert_same RubyLLM, config.llm_client
+  end
+end
+
+class ChatBackendAgentRegistryTest < Minitest::Test
+  def test_agent_registry_loads_names_from_hash_yaml
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'myagent.yml')
+      File.write(
+        path,
+        <<~YAML
+          ---
+          :default_agent: :coder
+          :agents:
+            :coder:
+              :display_name: ChatGPT
+              :temperature: 0.8
+              :model: gpt-4o-mini
+              :system_prompt: |
+                Be brief
+              :tools:
+                - search
+            :helper:
+              :model: gpt-4o-mini
+              :system_prompt: Be kind
+        YAML
+      )
+
+      registry = ChatBackend::AgentRegistry.load(path: path, env: {})
+
+      assert_equal 'coder', registry.default_agent_name
+      assert_equal %w[coder helper], registry.names
+    end
+  end
+
+  def test_agent_registry_loads_agent_label_and_temperature_from_hash_yaml
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'myagent.yml')
+      File.write(
+        path,
+        <<~YAML
+          ---
+          :default_agent: :coder
+          :agents:
+            :coder:
+              :display_name: ChatGPT
+              :temperature: 0.8
+              :model: gpt-4o-mini
+              :system_prompt: |
+                Be brief
+              :tools:
+                - search
+            :helper:
+              :model: gpt-4o-mini
+              :system_prompt: Be kind
+        YAML
+      )
+
+      registry = ChatBackend::AgentRegistry.load(path: path, env: {})
+
+      assert_equal 'ChatGPT', registry['coder'].label
+      assert_in_delta 0.8, registry['coder'].temperature, 0.0001
+    end
+  end
+
+  def test_agent_registry_loads_agent_prompt_and_tools_from_hash_yaml
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'myagent.yml')
+      File.write(
+        path,
+        <<~YAML
+          ---
+          :default_agent: :coder
+          :agents:
+            :coder:
+              :display_name: ChatGPT
+              :temperature: 0.8
+              :model: gpt-4o-mini
+              :system_prompt: |
+                Be brief
+              :tools:
+                - search
+            :helper:
+              :model: gpt-4o-mini
+              :system_prompt: Be kind
+        YAML
+      )
+
+      registry = ChatBackend::AgentRegistry.load(path: path, env: {})
+
+      assert_equal 'Be brief', registry['coder'].system_prompt
+      assert_equal %w[search], registry['coder'].tool_names
+    end
   end
 end
 
@@ -256,8 +379,14 @@ class ChatBackendSessionThreadTest < Minitest::Test
         input_queue: input_queue,
         output_queue: output_queue,
         api_key: 'test-key',
-        model: 'test-model',
-        system_prompt: 'Be brief',
+        agent: ChatBackend::AgentSpec.new(
+          name: 'default',
+          display_name: nil,
+          model: 'test-model',
+          system_prompt: 'Be brief',
+          temperature: nil,
+          tools: []
+        ),
         response_sync: nil,
         llm: llm
       )
@@ -337,5 +466,35 @@ class ChatBackendSessionThreadTest < Minitest::Test
       %w[Hel lo],
       events.select { |event| event[:type] == :stream_chunk }.map { |event| event[:content] }
     )
+  end
+end
+
+class ChatBackendCommandCompletionTest < Minitest::Test
+  def setup
+    @completion = Object.new.extend(ChatApp::CommandCompletion)
+  end
+
+  def test_command_completion_expands_short_command_prefix
+    result = @completion.send(
+      :command_completion,
+      buffer: '/a',
+      cursor: 2,
+      agent_names: %w[coder helper]
+    )
+
+    assert_equal '/agent ', result[:buffer]
+    assert_equal 7, result[:cursor]
+  end
+
+  def test_command_completion_expands_agent_name
+    result = @completion.send(
+      :command_completion,
+      buffer: '/agent h',
+      cursor: 8,
+      agent_names: %w[coder helper]
+    )
+
+    assert_equal '/agent helper ', result[:buffer]
+    assert_equal 14, result[:cursor]
   end
 end

@@ -58,6 +58,7 @@ module ChatApp
           @adapter::KEY_BACKSPACE => :backspace,
           @adapter::KEY_DC => :delete,
           @adapter::KEY_ENTER => :enter,
+          9 => :tab,
           3 => :quit,
           4 => :quit,
           8 => :backspace,
