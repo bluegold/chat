@@ -1,9 +1,29 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'tmpdir'
 require 'thread'
 
 require_relative 'chat_backend'
+
+class ChatBackendHistoryStoreTest < Minitest::Test
+  def test_history_store_persists_entries_and_trims_old_values
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, '.chat_history')
+      store = ChatBackend::HistoryStore.new(path: path, max_entries: 2)
+
+      store.add('first')
+      store.add('second')
+      store.add('third')
+
+      assert_equal ['second', 'third'], store.to_a
+      assert_equal "second\nthird", File.read(path)
+
+      reloaded = ChatBackend::HistoryStore.new(path: path, max_entries: 2)
+      assert_equal ['second', 'third'], reloaded.to_a
+    end
+  end
+end
 
 class ChatBackendTextLayoutTest < Minitest::Test
   def setup

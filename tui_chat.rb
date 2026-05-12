@@ -119,7 +119,8 @@ class CursesChatApp
     @messages = []
     @input_buffer = +''
     @input_cursor = 0
-    @input_history = []
+    @history_store = ChatBackend::HistoryStore.new(path: HISTORY_FILE, max_entries: MAX_HISTORY)
+    @input_history = @history_store.to_a
     @history_index = -1
     @history_draft = nil
     @transcript_scroll = 0
@@ -128,7 +129,6 @@ class CursesChatApp
     @running = true
     @pending_response = false
     @screen_ready = false
-    load_history
   end
 
   def run
@@ -225,7 +225,9 @@ class CursesChatApp
     return if @pending_response
 
     @messages << { role: :user, content: text }
-    save_history_entry(text)
+    stored = @history_store.add(text)
+    @input_history << stored if stored
+    @input_history = @input_history.last(@history_store.max_entries)
     @input_queue.push(type: :user_message, content: text)
 
     @input_buffer = +''
@@ -553,26 +555,6 @@ class CursesChatApp
     end
   end
 
-  def load_history
-    return unless File.exist?(HISTORY_FILE)
-
-    File.readlines(HISTORY_FILE, chomp: true).each do |line|
-      next if line.empty?
-
-      @input_history << line
-    end
-  rescue StandardError
-    @input_history = []
-  end
-
-  def save_history_entry(entry)
-    @input_history << entry
-    @input_history = @input_history.last(MAX_HISTORY)
-    File.write(HISTORY_FILE, @input_history.join("\n"))
-  rescue StandardError
-    # History is best-effort only.
-  end
-
   def load_system_prompt
     prompt_file = File.join(Dir.pwd, '.system_prompt')
     return nil unless File.exist?(prompt_file)
@@ -607,12 +589,6 @@ class CursesChatApp
 end
 
 if __FILE__ == $PROGRAM_NAME
-  api_key = ENV['OPENAI_API_KEY'] || ENV['ZAI_API_KEY']
-  if api_key.nil? || api_key.empty?
-    STDERR.puts 'Error: OPENAI_API_KEY environment variable is not set'
-    exit 1
-  end
-
-  model = ENV.fetch('OPENAI_MODEL', 'gpt-4o-mini')
-  CursesChatApp.new(api_key, model: model).run
+  require_relative 'chat'
+  ChatAppLauncher.run(argv: [], env: ENV.merge('CHAT_UI' => 'curses'))
 end

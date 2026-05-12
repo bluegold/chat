@@ -23,8 +23,8 @@ class ChatCLI
     @system_prompt = load_system_prompt
     @response_sync = ChatBackend::ResponseSync.new
     @transcript = []
-
-    load_history
+    @history_store = ChatBackend::HistoryStore.new(path: HISTORY_FILE, max_entries: MAX_HISTORY)
+    load_history_into_reline
 
     @session_thread = ChatBackend::SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt, @response_sync)
   end
@@ -67,7 +67,8 @@ class ChatCLI
   end
 
   def submit_input(content)
-    add_to_history(content)
+    @history_store.add(content)
+    Reline::HISTORY.push(content)
     @transcript << { role: :user, content: content }
     @response_sync.expect_response
     @input_queue.push(type: :user_message, content: content)
@@ -90,7 +91,6 @@ class ChatCLI
 
   def shutdown
     @shutdown = true
-    save_history
     @input_queue.push(type: :shutdown)
     @session_thread&.join
     print "\e[?25h"
@@ -197,25 +197,10 @@ class ChatCLI
     [24, 80]
   end
 
-  def load_history
-    return unless File.exist?(HISTORY_FILE)
-
-    File.readlines(HISTORY_FILE, chomp: true).each do |line|
-      next if line.empty?
-
+  def load_history_into_reline
+    @history_store.each do |line|
       Reline::HISTORY.push(line)
     end
-  rescue StandardError
-    # History is best-effort only.
-  end
-
-  def add_to_history(input)
-    Reline::HISTORY.push(input)
-  end
-
-  def save_history
-    history = Reline::HISTORY.to_a.last(MAX_HISTORY)
-    File.write(HISTORY_FILE, history.join("\n"))
   rescue StandardError
     # History is best-effort only.
   end
@@ -231,14 +216,66 @@ class ChatCLI
   end
 end
 
-if __FILE__ == $PROGRAM_NAME
-  api_key = ENV['OPENAI_API_KEY'] || ENV['ZAI_API_KEY']
-  if api_key.nil? || api_key.empty?
-    STDERR.puts 'Error: OPENAI_API_KEY environment variable is not set'
-    exit 1
+module ChatAppLauncher
+  module_function
+
+  def run(argv: ARGV, env: ENV)
+    ui = resolve_ui(argv, env)
+    api_key = resolve_api_key(env)
+    model = env.fetch('OPENAI_MODEL', 'gpt-4o-mini')
+
+    case ui
+    when 'reline'
+      ChatCLI.new(api_key, model).run
+    when 'curses'
+      require_relative 'tui_chat'
+      CursesChatApp.new(api_key, model: model).run
+    else
+      abort "Error: unknown UI #{ui.inspect} (use reline or curses)"
+    end
   end
 
-  model = ENV.fetch('OPENAI_MODEL', 'gpt-4o-mini')
-  cli = ChatCLI.new(api_key, model)
-  cli.run
+  def resolve_ui(argv, env)
+    ui = env.fetch('CHAT_UI', 'reline')
+    args = argv.dup
+
+    until args.empty?
+      arg = args.shift
+      case arg
+      when '--ui'
+        ui = args.shift || abort('Error: --ui requires a value')
+      when /\A--ui=(.+)\z/
+        ui = Regexp.last_match(1)
+      when '--help', '-h'
+        print_usage
+        exit 0
+      else
+        abort "Error: unknown argument #{arg}"
+      end
+    end
+
+    ui
+  end
+
+  def resolve_api_key(env)
+    api_key = env['OPENAI_API_KEY'] || env['ZAI_API_KEY']
+    return api_key unless api_key.nil? || api_key.empty?
+
+    abort 'Error: OPENAI_API_KEY environment variable is not set'
+  end
+
+  def print_usage
+    puts <<~USAGE
+      Usage: ruby chat.rb [--ui reline|curses]
+
+      Environment:
+        CHAT_UI=reline|curses
+        OPENAI_API_KEY or ZAI_API_KEY
+        OPENAI_MODEL
+    USAGE
+  end
+end
+
+if __FILE__ == $PROGRAM_NAME
+  ChatAppLauncher.run
 end

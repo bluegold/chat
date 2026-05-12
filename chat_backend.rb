@@ -4,6 +4,60 @@ require 'thread'
 require 'ruby_llm'
 
 module ChatBackend
+  class HistoryStore
+    attr_reader :path, :max_entries
+
+    def initialize(path:, max_entries: 1000)
+      @path = path
+      @max_entries = max_entries
+      @entries = []
+      load
+    end
+
+    def each(&block)
+      @entries.each(&block)
+    end
+
+    def to_a
+      @entries.dup
+    end
+
+    def add(entry)
+      text = entry.to_s
+      return if text.empty?
+
+      @entries << text
+      @entries = @entries.last(@max_entries)
+      save
+      text
+    end
+
+    def empty?
+      @entries.empty?
+    end
+
+    private
+
+    def load
+      return unless File.exist?(@path)
+
+      File.readlines(@path, chomp: true).each do |line|
+        next if line.empty?
+
+        @entries << line
+      end
+      @entries = @entries.last(@max_entries)
+    rescue StandardError
+      @entries = []
+    end
+
+    def save
+      File.write(@path, @entries.join("\n"))
+    rescue StandardError
+      # History is best-effort only.
+    end
+  end
+
   class ResponseSync
     def initialize
       @mutex = Mutex.new
