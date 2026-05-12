@@ -3,6 +3,4 @@
 
 require_relative 'lib/chat_app_launcher'
 
-if __FILE__ == $PROGRAM_NAME
-  ChatAppLauncher.run(argv: ARGV, env: ENV)
-end
+ChatAppLauncher.run(argv: ARGV, env: ENV) if __FILE__ == $PROGRAM_NAME

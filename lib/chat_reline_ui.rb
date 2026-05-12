@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'thread'
 require 'io/console'
 require 'reline'
 require_relative 'chat_backend'
@@ -26,7 +25,16 @@ module ChatApp
       @history_store = ChatBackend::HistoryStore.new(path: HISTORY_FILE, max_entries: MAX_HISTORY)
       load_history_into_reline
 
-      @session_thread = ChatBackend::SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt, @status)
+      session_config = ChatBackend::SessionConfig.new(
+        input_queue: @input_queue,
+        output_queue: @output_queue,
+        api_key: api_key,
+        model: model,
+        system_prompt: @system_prompt,
+        response_sync: @status,
+        llm: RubyLLM
+      )
+      @session_thread = ChatBackend::SessionThread.new(session_config)
     end
 
     def run
@@ -39,7 +47,7 @@ module ChatApp
     private
 
     def setup_terminal
-      STDOUT.sync = true
+      $stdout.sync = true
       print "\e[?25h"
     end
 
@@ -165,14 +173,13 @@ module ChatApp
         rows, cols = console.winsize
         rows = 24 if rows.nil? || rows <= 0
         cols = 80 if cols.nil? || cols <= 0
-        [rows, cols]
       else
         rows = ENV.fetch('LINES', 24).to_i
         cols = ENV.fetch('COLUMNS', 80).to_i
         rows = 24 if rows <= 0
         cols = 80 if cols <= 0
-        [rows, cols]
       end
+      [rows, cols]
     rescue StandardError
       [24, 80]
     end

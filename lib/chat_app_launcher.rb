@@ -63,6 +63,4 @@ module ChatAppLauncher
   end
 end
 
-if __FILE__ == $PROGRAM_NAME
-  ChatAppLauncher.run
-end
+ChatAppLauncher.run if __FILE__ == $PROGRAM_NAME

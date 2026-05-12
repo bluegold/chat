@@ -2,7 +2,6 @@
 
 require 'minitest/autorun'
 require 'tmpdir'
-require 'thread'
 
 require_relative '../lib/chat_backend'
 
@@ -16,11 +15,12 @@ class ChatBackendHistoryStoreTest < Minitest::Test
       store.add('second')
       store.add('third')
 
-      assert_equal ['second', 'third'], store.to_a
+      assert_equal %w[second third], store.to_a
       assert_equal "second\nthird", File.read(path)
 
       reloaded = ChatBackend::HistoryStore.new(path: path, max_entries: 2)
-      assert_equal ['second', 'third'], reloaded.to_a
+
+      assert_equal %w[second third], reloaded.to_a
     end
   end
 end
@@ -92,7 +92,7 @@ class ChatBackendTranscriptTest < Minitest::Test
     assert_equal ['Assistant:', 'world', ''], transcript.tail_lines(20, 3)
   end
 
-  def test_transcript_window_returns_scrolled_slice
+  def test_transcript_window_returns_bottom_window
     transcript = ChatBackend::Transcript.new(
       [
         { role: :user, content: 'hello' },
@@ -101,28 +101,97 @@ class ChatBackendTranscriptTest < Minitest::Test
     )
 
     assert_equal ['Assistant:', 'world', ''], transcript.window(20, height: 3, scroll: 0)
+  end
+
+  def test_transcript_window_returns_scrolled_window
+    transcript = ChatBackend::Transcript.new(
+      [
+        { role: :user, content: 'hello' },
+        { role: :assistant, content: 'world' }
+      ]
+    )
+
     assert_equal ['', 'Assistant:', 'world'], transcript.window(20, height: 3, scroll: 1)
   end
 end
 
 class ChatBackendStatusTest < Minitest::Test
-  def test_status_flags_follow_state_transitions
+  def test_status_starts_idle
     status = ChatBackend::Status.new
 
-    refute status.pending?
-    refute status.streaming?
+    refute_predicate status, :pending?
+    refute_predicate status, :streaming?
+  end
+
+  def test_status_expect_response_marks_pending
+    status = ChatBackend::Status.new
 
     status.expect_response
-    assert status.pending?
-    refute status.streaming?
 
+    assert_predicate status, :pending?
+    refute_predicate status, :streaming?
+  end
+
+  def test_status_start_response_marks_streaming
+    status = ChatBackend::Status.new
+
+    status.expect_response
     status.start_response
-    assert status.pending?
-    assert status.streaming?
 
+    assert_predicate status, :pending?
+    assert_predicate status, :streaming?
+  end
+
+  def test_status_end_response_clears_state
+    status = ChatBackend::Status.new
+
+    status.expect_response
+    status.start_response
     status.end_response
-    refute status.pending?
-    refute status.streaming?
+
+    refute_predicate status, :pending?
+    refute_predicate status, :streaming?
+  end
+end
+
+class ChatBackendSessionConfigTest < Minitest::Test
+  def test_session_config_wraps_backend_dependencies
+    config = ChatBackend::SessionConfig.new(
+      input_queue: Queue.new,
+      output_queue: Queue.new,
+      api_key: 'test-key',
+      model: 'test-model',
+      system_prompt: 'Be brief',
+      response_sync: ChatBackend::Status.new,
+      llm: nil
+    )
+
+    assert_equal(
+      {
+        input_queue: config.input_queue,
+        output_queue: config.output_queue,
+        api_key: 'test-key',
+        model: 'test-model',
+        system_prompt: 'Be brief',
+        response_sync: config.response_sync,
+        llm: nil
+      },
+      config.to_h
+    )
+  end
+
+  def test_session_config_defaults_llm_client_to_ruby_llm
+    config = ChatBackend::SessionConfig.new(
+      input_queue: Queue.new,
+      output_queue: Queue.new,
+      api_key: 'test-key',
+      model: 'test-model',
+      system_prompt: nil,
+      response_sync: nil,
+      llm: nil
+    )
+
+    assert_same RubyLLM, config.llm_client
   end
 end
 
@@ -147,9 +216,9 @@ class ChatBackendSessionThreadTest < Minitest::Test
       @messages << { role: role, content: content }
     end
 
-    def ask(content)
+    def ask(content, &)
       @asked_content = content
-      @chunks.each { |chunk| yield(chunk) }
+      @chunks.each(&)
       Struct.new(:content).new(@response_text)
     end
   end
@@ -181,20 +250,57 @@ class ChatBackendSessionThreadTest < Minitest::Test
     items
   end
 
-  def test_session_thread_streams_chunks_and_replays_system_prompt
+  def build_session(input_queue, output_queue, llm)
+    ChatBackend::SessionThread.new(
+      ChatBackend::SessionConfig.new(
+        input_queue: input_queue,
+        output_queue: output_queue,
+        api_key: 'test-key',
+        model: 'test-model',
+        system_prompt: 'Be brief',
+        response_sync: nil,
+        llm: llm
+      )
+    )
+  end
+
+  def test_session_thread_replays_system_prompt_and_configures_llm
     input_queue = Queue.new
     output_queue = Queue.new
-    llm = FakeLLM.new(chunks: ['Hel', 'lo'], response_text: 'Hello')
+    llm = FakeLLM.new(chunks: %w[Hel lo], response_text: 'Hello')
 
-    session = ChatBackend::SessionThread.new(
-      input_queue,
-      output_queue,
-      'test-key',
-      'test-model',
-      'Be brief',
-      nil,
-      llm: llm
-    )
+    session = build_session(input_queue, output_queue, llm)
+
+    input_queue << { type: :user_message, content: 'Hi' }
+    input_queue << { type: :shutdown }
+    session.join(1)
+
+    assert_equal 'test-key', llm.configured.openai_api_key
+    assert_equal 'test-model', llm.configured.default_model
+    assert_equal 'Be brief', llm.chat_instance.instructions
+  end
+
+  def test_session_thread_replays_history_and_asked_content
+    input_queue = Queue.new
+    output_queue = Queue.new
+    llm = FakeLLM.new(chunks: %w[Hel lo], response_text: 'Hello')
+
+    session = build_session(input_queue, output_queue, llm)
+
+    input_queue << { type: :user_message, content: 'Hi' }
+    input_queue << { type: :shutdown }
+    session.join(1)
+
+    assert_equal [], llm.chat_instance.messages
+    assert_equal 'Hi', llm.chat_instance.asked_content
+  end
+
+  def test_session_thread_emits_stream_events
+    input_queue = Queue.new
+    output_queue = Queue.new
+    llm = FakeLLM.new(chunks: %w[Hel lo], response_text: 'Hello')
+
+    session = build_session(input_queue, output_queue, llm)
 
     input_queue << { type: :user_message, content: 'Hi' }
     input_queue << { type: :shutdown }
@@ -202,18 +308,34 @@ class ChatBackendSessionThreadTest < Minitest::Test
 
     events = drain_queue(output_queue)
 
-    assert_equal 'test-key', llm.configured.openai_api_key
-    assert_equal 'test-model', llm.configured.default_model
-    assert_equal 'Be brief', llm.chat_instance.instructions
-    assert_equal [], llm.chat_instance.messages
-    assert_equal 'Hi', llm.chat_instance.asked_content
-    assert_equal [
-      :stream_start,
-      :assistant_start,
-      :stream_chunk,
-      :stream_chunk,
-      :stream_end
-    ], events.map { |event| event[:type] }
-    assert_equal ['Hel', 'lo'], events.select { |event| event[:type] == :stream_chunk }.map { |event| event[:content] }
+    assert_equal(
+      %i[
+        stream_start
+        assistant_start
+        stream_chunk
+        stream_chunk
+        stream_end
+      ],
+      events.map { |event| event[:type] }
+    )
+  end
+
+  def test_session_thread_emits_chunk_payloads
+    input_queue = Queue.new
+    output_queue = Queue.new
+    llm = FakeLLM.new(chunks: %w[Hel lo], response_text: 'Hello')
+
+    session = build_session(input_queue, output_queue, llm)
+
+    input_queue << { type: :user_message, content: 'Hi' }
+    input_queue << { type: :shutdown }
+    session.join(1)
+
+    events = drain_queue(output_queue)
+
+    assert_equal(
+      %w[Hel lo],
+      events.select { |event| event[:type] == :stream_chunk }.map { |event| event[:content] }
+    )
   end
 end

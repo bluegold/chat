@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'thread'
 require 'ruby_llm'
 
 module ChatBackend
@@ -77,7 +76,10 @@ module ChatBackend
     def char_width(char)
       codepoint = char.ord
       return 0 if codepoint < 32 || (127..159).cover?(codepoint)
-      return 2 if char.match?(/[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\u1100-\u115F\u2329\u232A\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/u)
+      return 2 if char.match?(
+        /[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\u1100-\u115F\u2329\u232A\u2E80-\uA4CF\uAC00-\uD7A3\
+\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/u
+      )
 
       1
     end
@@ -152,7 +154,7 @@ module ChatBackend
       return lines if height <= 0
 
       max_scroll = [lines.length - height, 0].max
-      scroll = [[scroll.to_i, 0].max, max_scroll].min
+      scroll = scroll.to_i.clamp(0, max_scroll)
       start_index = [lines.length - height - scroll, 0].max
       lines[start_index, height] || []
     end
@@ -178,9 +180,7 @@ module ChatBackend
       load
     end
 
-    def each(&block)
-      @entries.each(&block)
-    end
+    def each = @entries.each
 
     def to_a
       @entries.dup
@@ -219,6 +219,20 @@ module ChatBackend
       File.write(@path, @entries.join("\n"))
     rescue StandardError
       # History is best-effort only.
+    end
+  end
+
+  SessionConfig = Data.define(
+    :input_queue,
+    :output_queue,
+    :api_key,
+    :model,
+    :system_prompt,
+    :response_sync,
+    :llm
+  ) do
+    def llm_client
+      llm || RubyLLM
     end
   end
 
@@ -266,17 +280,17 @@ module ChatBackend
   class SessionThread
     attr_reader :thread
 
-    def initialize(input_queue, output_queue, api_key, model, system_prompt = nil, response_sync = nil, llm: RubyLLM)
-      @input_queue = input_queue
-      @output_queue = output_queue
-      @system_prompt = system_prompt
-      @response_sync = response_sync
+    def initialize(config)
+      @input_queue = config.input_queue
+      @output_queue = config.output_queue
+      @system_prompt = config.system_prompt
+      @response_sync = config.response_sync
       @history = []
-      @llm = llm
+      @llm = config.llm_client
 
-      @llm.configure do |config|
-        config.openai_api_key = api_key
-        config.default_model = model
+      @llm.configure do |llm_config|
+        llm_config.openai_api_key = config.api_key
+        llm_config.default_model = config.model
       end
 
       @thread = Thread.new { run }
@@ -384,7 +398,7 @@ module ChatBackend
 
     def format_error(error)
       backtrace = Array(error.backtrace).first(5)
-      [ "#{error.class}: #{error.message}", *backtrace ].join("\n")
+      ["#{error.class}: #{error.message}", *backtrace].join("\n")
     end
   end
 end

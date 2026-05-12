@@ -1,8 +1,6 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'thread'
-
 begin
   require 'curses'
 rescue LoadError => e
@@ -116,7 +114,16 @@ module ChatApp
       @input_queue = Queue.new
       @output_queue = Queue.new
       @status = ChatBackend::Status.new
-      @session_thread = ChatBackend::SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt, @status)
+      session_config = ChatBackend::SessionConfig.new(
+        input_queue: @input_queue,
+        output_queue: @output_queue,
+        api_key: api_key,
+        model: model,
+        system_prompt: @system_prompt,
+        response_sync: @status,
+        llm: RubyLLM
+      )
+      @session_thread = ChatBackend::SessionThread.new(session_config)
       @input = CursesInput.new
       @transcript = ChatBackend::Transcript.new
       @input_buffer = +''
@@ -127,7 +134,7 @@ module ChatApp
       @history_draft = nil
       @transcript_scroll = 0
       @mouse_debug = nil
-      @debug_mouse_enabled = env_truthy?(ENV['TUI_CHAT_DEBUG_MOUSE']) || env_truthy?(ENV['TUI_CHAT_DEBUG'])
+      @debug_mouse_enabled = env_truthy?(ENV.fetch('TUI_CHAT_DEBUG_MOUSE', nil)) || env_truthy?(ENV.fetch('TUI_CHAT_DEBUG', nil))
       @running = true
       @screen_ready = false
     end
@@ -256,13 +263,12 @@ module ChatApp
         if @history_index < @input_history.length - 1
           @history_index += 1
           @input_buffer = @input_history[@history_index].dup
-          @input_cursor = input_length
         else
           @history_index = -1
           @input_buffer = @history_draft.to_s
           @history_draft = nil
-          @input_cursor = input_length
         end
+        @input_cursor = input_length
       end
     end
 
@@ -319,10 +325,10 @@ module ChatApp
         Curses.stdscr.addstr(truncate_to_width(line, cols))
       end
 
-      if visible_lines.empty?
-        Curses.stdscr.setpos(1, 0)
-        Curses.stdscr.addstr(truncate_to_width('Type a message and press Enter.', cols))
-      end
+      return unless visible_lines.empty?
+
+      Curses.stdscr.setpos(1, 0)
+      Curses.stdscr.addstr(truncate_to_width('Type a message and press Enter.', cols))
     end
 
     def draw_separator(rows, cols)
@@ -370,7 +376,7 @@ module ChatApp
     end
 
     def move_input_cursor_to(position)
-      @input_cursor = [[position, 0].max, input_length].min
+      @input_cursor = position.clamp(0, input_length)
     end
 
     def delete_before_cursor
@@ -394,7 +400,7 @@ module ChatApp
       available_width = [available_width, 0].max
       chars = @input_buffer.each_char.to_a
       widths = chars.map { |char| display_width(char) }
-      cursor_index = [[@input_cursor, 0].max, chars.length].min
+      cursor_index = @input_cursor.clamp(0, chars.length)
       cursor_width = widths[0...cursor_index].sum
       total_width = widths.sum
 
@@ -494,7 +500,7 @@ module ChatApp
           0
         end
 
-      (bstate & mask) != 0
+      bstate.anybits?(mask)
     end
 
     def format_mouse_debug(event)
