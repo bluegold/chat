@@ -36,6 +36,7 @@ module ChatApp
     def setup_curses
       Curses.init_screen
       @screen_ready = true
+      enable_bracketed_paste
       Curses.raw
       Curses.noecho
       Curses.stdscr.keypad(true)
@@ -181,6 +182,7 @@ module ChatApp
 
     def shutdown
       @running = false
+      disable_bracketed_paste
       close_screen
       @session.shutdown
     rescue StandardError
@@ -194,6 +196,23 @@ module ChatApp
       @screen_ready = false
     rescue StandardError
       @screen_ready = false
+    end
+
+    def enable_bracketed_paste
+      write_terminal_sequence("\e[?2004h")
+    end
+
+    def disable_bracketed_paste
+      write_terminal_sequence("\e[?2004l")
+    end
+
+    def write_terminal_sequence(sequence)
+      return unless $stdout.respond_to?(:write)
+
+      $stdout.write(sequence)
+      $stdout.flush if $stdout.respond_to?(:flush)
+    rescue StandardError
+      nil
     end
 
     def env_truthy?(value)
