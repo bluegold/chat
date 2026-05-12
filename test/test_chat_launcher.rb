@@ -2,7 +2,7 @@
 
 require 'minitest/autorun'
 
-require_relative 'chat'
+require_relative '../chat'
 
 class ChatAppLauncherTest < Minitest::Test
   def test_resolve_ui_defaults_to_reline

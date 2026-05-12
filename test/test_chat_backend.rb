@@ -4,7 +4,7 @@ require 'minitest/autorun'
 require 'tmpdir'
 require 'thread'
 
-require_relative 'chat_backend'
+require_relative '../lib/chat_backend'
 
 class ChatBackendHistoryStoreTest < Minitest::Test
   def test_history_store_persists_entries_and_trims_old_values
