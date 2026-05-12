@@ -4,6 +4,7 @@ require 'yaml'
 require 'ruby_llm'
 require_relative 'chat_local_tools'
 require_relative 'chat_memory_tools'
+require_relative 'chat_code_execution_tools'
 
 module ChatBackend
   module TextLayout
@@ -714,6 +715,9 @@ module ChatBackend
       return tool_class if tool_class
 
       tool_class = ChatApp::MemoryTools.tool_class(tool_name) if defined?(ChatApp::MemoryTools)
+      return tool_class if tool_class
+
+      tool_class = ChatApp::CodeExecutionTools.tool_class(tool_name) if defined?(ChatApp::CodeExecutionTools)
       return tool_class if tool_class
 
       case tool_name.to_s

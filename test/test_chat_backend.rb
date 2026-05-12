@@ -320,6 +320,14 @@ class ChatBackendStatusLineTest < Minitest::Test
   end
 end
 
+class ChatBackendCodeExecutionResolveTest < Minitest::Test
+  def test_resolve_tool_finds_ruby_code_execution_tool
+    session = ChatBackend::SessionThread.allocate
+
+    assert_equal ChatApp::CodeExecutionTools::RunRubyTool, session.send(:resolve_tool, 'run_ruby')
+  end
+end
+
 class ChatBackendSessionConfigTest < Minitest::Test
   def test_agent_spec_exposes_metadata
     spec = ChatBackend::AgentSpec.new(
