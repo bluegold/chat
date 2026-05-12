@@ -6,6 +6,7 @@ require_relative 'chat_backend'
 require_relative 'chat_agent_controls'
 require_relative 'chat_command_completion'
 require_relative 'chat_tool_tracking'
+require_relative 'chat_session_status'
 require_relative 'chat_session_info'
 
 Thread.report_on_exception = true
@@ -16,6 +17,7 @@ module ChatApp
     include AgentControls
     include CommandCompletion
     include ToolTracking
+    include SessionStatus
     include SessionInfo
 
     HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
@@ -25,6 +27,7 @@ module ChatApp
       @api_key = api_key
       @agent_registry = agent_registry
       @agent_name = agent_name.to_s
+      @debug_enabled = env_truthy?(ENV.fetch('CHAT_DEBUG', nil)) || env_truthy?(ENV.fetch('CHAT_RELINE_DEBUG', nil))
       @input_queue = Queue.new
       @output_queue = Queue.new
       @shutdown = false
@@ -45,14 +48,11 @@ module ChatApp
 
     def setup_terminal
       $stdout.sync = true
-      print "\e[?25h"
     end
 
     def main_loop
       until @shutdown
         drain_output_queue
-        render
-        render_input_zone(prompt_text)
 
         input = read_input(prompt_text)
         break if input.nil? || exit_command?(input)
@@ -66,12 +66,16 @@ module ChatApp
     end
 
     def read_input(prompt)
-      Reline.readline(prompt, false)
+      input = Reline.readline(prompt, false)
+      debug_log("read input: #{input.nil? ? 'nil' : input.inspect}")
+      input
     rescue Interrupt
       nil
     end
 
     def submit_input(content)
+      debug_log("submit input: #{content.inspect}")
+
       if agent_command?(content)
         agent_name = agent_name_from_command(content)
         select_agent(agent_name)
@@ -92,28 +96,24 @@ module ChatApp
     end
 
     def wait_for_response
+      debug_log('waiting for response')
       loop do
         drain_output_queue
-        render
-        render_input_zone(@status.pending? || @status.streaming? ? 'thinking...' : prompt_text)
         break unless @status.pending? || @status.streaming?
 
         sleep 0.03
       end
 
       drain_output_queue
-      render
-      render_input_zone(prompt_text)
+      debug_log('response completed')
     end
 
     def shutdown
       @shutdown = true
       restore_completion
       shutdown_session
-      print "\e[?25h"
-      puts
-    rescue StandardError
-      # Shutdown should not raise into the shell.
+    rescue StandardError => e
+      debug_exception('shutdown', e)
     end
 
     def drain_output_queue
@@ -122,16 +122,23 @@ module ChatApp
         handle_output_message(msg)
       rescue ThreadError
         break
+      rescue StandardError => e
+        debug_exception('drain_output_queue', e)
+        break
       end
     end
 
     def handle_output_message(msg)
+      debug_log("output: #{msg[:type]}")
       @transcript.apply_output_message(msg)
       case msg[:type]
       when :tool_call
         start_tool_status(msg[:name])
+        puts
+        puts tool_call_text(msg[:name], msg[:arguments])
       when :tool_result, :stream_end, :error
         clear_tool_status
+        print_completed_output(msg)
       end
     end
 
@@ -154,6 +161,7 @@ module ChatApp
         llm: RubyLLM
       )
       @session_thread = ChatBackend::SessionThread.new(session_config)
+      debug_log("session started: #{agent.name}")
     end
 
     def select_agent(agent_name)
@@ -178,93 +186,49 @@ module ChatApp
 
       @input_queue.push(type: :shutdown)
       @session_thread.join
-    rescue StandardError
+    rescue StandardError => e
+      debug_exception('shutdown_session', e)
       nil
-    end
-
-    def render
-      rows, cols = terminal_size
-      lines = build_screen_lines(rows, cols)
-
-      print "\e[2J\e[H"
-      lines.each do |entry|
-        print render_entry(entry, cols)
-        print "\n"
-      end
-    rescue StandardError
-      # Rendering should fail closed, not crash the chat loop.
-    end
-
-    def render_input_zone(prompt)
-      rows, cols = terminal_size
-      return if rows <= 0 || cols <= 0
-
-      status_line = prompt
-      print "\e[#{rows - 1};1H"
-      print "\e[K"
-      print truncate_to_width(status_line, cols)
-      $stdout.flush
-    rescue StandardError
-      # Input-zone rendering is best-effort.
     end
 
     def prompt_text
       '> '
     end
 
-    def build_screen_lines(rows, cols)
-      content_height = [rows - 2, 1].max
-      header = header_line(cols)
-      transcript = @transcript.window_line_entries(cols, height: [content_height - 1, 0].max)
-      visible_lines = [{ role: :header, text: header }, *transcript]
-      separator = '-' * [cols, 0].max
-      [*visible_lines, { role: :separator, text: separator }]
-    end
-
-    def render_entry(entry, cols)
-      text = truncate_to_width(entry[:text], cols)
-
-      case entry[:role]
-      when :info
-        "\e[2m#{text}\e[0m"
+    def env_truthy?(value)
+      case value.to_s.strip.downcase
+      when '1', 'true', 'yes', 'on'
+        true
       else
-        text
+        false
       end
-    end
-
-    def header_line(cols)
-      agent_state = "agent: #{@agent&.label || @agent_name}"
-      parts = ["RubyLLM Chat", agent_state, "model: #{@model}", "tools: #{tool_count}", "status: #{status_code}"]
-      parts << @notice_message if @notice_message
-      truncate_to_width(parts.join(' | '), cols)
-    end
-
-    def response_pending?
-      @status.pending? || @status.streaming?
-    end
-
-    def terminal_size
-      if IO.respond_to?(:console) && (console = IO.console)
-        rows, cols = console.winsize
-        rows = 24 if rows.nil? || rows <= 0
-        cols = 80 if cols.nil? || cols <= 0
-      else
-        rows = ENV.fetch('LINES', 24).to_i
-        cols = ENV.fetch('COLUMNS', 80).to_i
-        rows = 24 if rows <= 0
-        cols = 80 if cols <= 0
-      end
-      [rows, cols]
-    rescue StandardError
-      [24, 80]
     end
 
     def load_history_into_reline
-      @history_store.each do |line|
-        Reline::HISTORY.push(line)
+      entries = @history_store.to_a
+      Reline::HISTORY.clear
+      Reline::HISTORY.concat(entries)
+      debug_log("history loaded: #{Reline::HISTORY.size}")
+    rescue StandardError => e
+      debug_exception('load_history_into_reline', e)
+    end
+
+    def print_completed_output(msg)
+      case msg[:type]
+      when :stream_end
+        assistant = @transcript.messages.reverse.find { |message| message[:role] == :assistant && !message[:content].to_s.empty? }
+        return unless assistant
+
+        puts
+        assistant[:content].each_line(chomp: true) do |line|
+          puts line
+        end
+        puts
+      when :error
+        puts
+        puts "Error: #{msg[:message]}"
+        puts
       end
-    rescue StandardError
-      # History is best-effort only.
     end
 
     def load_system_prompt
@@ -276,15 +240,17 @@ module ChatApp
       @previous_completion_append_character = Reline.completion_append_character
       Reline.completion_proc = method(:reline_completion_candidates)
       Reline.completion_append_character = nil
-    rescue StandardError
-      # Completion is a best-effort enhancement.
+      debug_log('completion installed')
+    rescue StandardError => e
+      debug_exception('install_completion', e)
     end
 
     def restore_completion
       Reline.completion_proc = @previous_completion_proc
       Reline.completion_append_character = @previous_completion_append_character
-    rescue StandardError
-      # Resetting completion should not break shutdown.
+      debug_log('completion restored')
+    rescue StandardError => e
+      debug_exception('restore_completion', e)
     end
 
     def reline_completion_candidates
@@ -293,8 +259,32 @@ module ChatApp
         cursor: Reline.point,
         agent_names: @agent_registry.names
       )
-    rescue StandardError
+    rescue StandardError => e
+      debug_exception('reline_completion_candidates', e)
       []
+    end
+
+    def debug_enabled?
+      @debug_enabled
+    end
+
+    def debug_log(message)
+      return unless debug_enabled?
+
+      warn("[reline-debug] #{message}")
+    rescue StandardError
+      nil
+    end
+
+    def debug_exception(context, exception)
+      return unless debug_enabled?
+
+      debug_log("#{context}: #{exception.class}: #{exception.message}")
+      Array(exception.backtrace).first(8).each do |line|
+        warn("[reline-debug]   #{line}")
+      end
+    rescue StandardError
+      nil
     end
   end
 end
