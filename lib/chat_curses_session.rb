@@ -185,7 +185,7 @@ module ChatApp
     def append_input(key)
       return unless key.is_a?(String)
       return if response_pending?
-      return unless key.match?(/\A[[:print:]]+\z/u)
+      return unless key.match?(/\A[[:print:]\n\t]+\z/u)
 
       chars = @input_buffer.each_char.to_a
       chars.insert(@input_cursor, key)
