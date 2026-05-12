@@ -3,6 +3,7 @@
 require 'yaml'
 require 'ruby_llm'
 require_relative 'chat_local_tools'
+require_relative 'chat_memory_tools'
 
 module ChatBackend
   module TextLayout
@@ -461,20 +462,49 @@ module ChatBackend
     def load
       return unless File.exist?(@path)
 
-      File.readlines(@path, chomp: true).each do |line|
-        next if line.empty?
-
-        @entries << line
-      end
+      load_serialized_entries || load_legacy_entries
       @entries = @entries.last(@max_entries)
     rescue StandardError
       @entries = []
     end
 
     def save
-      File.write(@path, @entries.join("\n"))
+      File.write(@path, YAML.dump(@entries))
     rescue StandardError
       # History is best-effort only.
+    end
+
+    def load_serialized_entries
+      content = File.read(@path)
+      return false unless serialized_history?(content)
+
+      entries = YAML.safe_load(content, permitted_classes: [Symbol], aliases: true)
+      return false unless entries.is_a?(Array)
+
+      entries.each do |entry|
+        next if entry.nil?
+
+        @entries << entry.to_s
+      end
+
+      true
+    rescue StandardError
+      false
+    end
+
+    def load_legacy_entries
+      File.readlines(@path, chomp: true).each do |line|
+        next if line.empty?
+
+        @entries << line
+      end
+    rescue StandardError
+      @entries = []
+    end
+
+    def serialized_history?(content)
+      stripped = content.to_s.lstrip
+      stripped.start_with?('---', '!')
     end
   end
 
@@ -681,6 +711,9 @@ module ChatBackend
       return tool_name if tool_name.respond_to?(:call)
 
       tool_class = ChatApp::LocalTools.tool_class(tool_name) if defined?(ChatApp::LocalTools)
+      return tool_class if tool_class
+
+      tool_class = ChatApp::MemoryTools.tool_class(tool_name) if defined?(ChatApp::MemoryTools)
       return tool_class if tool_class
 
       case tool_name.to_s

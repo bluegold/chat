@@ -11,21 +11,60 @@ require_relative '../lib/chat_session_status'
 require_relative '../lib/chat_session_info'
 
 class ChatBackendHistoryStoreTest < Minitest::Test
-  def test_history_store_persists_entries_and_trims_old_values
+  def test_history_store_persists_multiline_entries_and_trims_old_values
     Dir.mktmpdir do |dir|
       path = File.join(dir, '.chat_history')
       store = ChatBackend::HistoryStore.new(path: path, max_entries: 2)
 
-      store.add('first')
+      store.add("first\nline")
       store.add('second')
-      store.add('third')
+      store.add("third\nline")
 
-      assert_equal %w[second third], store.to_a
-      assert_equal "second\nthird", File.read(path)
+      assert_equal 'second', store.to_a.first
+      assert_equal "third\nline", store.to_a.last
+    end
+  end
+
+  def test_history_store_serializes_multiline_entries_as_yaml
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, '.chat_history')
+      store = ChatBackend::HistoryStore.new(path: path, max_entries: 2)
+
+      store.add("first\nline")
+      store.add('second')
+      store.add("third\nline")
+
+      contents = File.read(path)
+
+      assert_match(/\A---\n/, contents)
+      assert_includes contents, "|-\n  third\n  line"
+    end
+  end
+
+  def test_history_store_reloads_multiline_entries
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, '.chat_history')
+      store = ChatBackend::HistoryStore.new(path: path, max_entries: 2)
+
+      store.add("first\nline")
+      store.add('second')
+      store.add("third\nline")
 
       reloaded = ChatBackend::HistoryStore.new(path: path, max_entries: 2)
 
-      assert_equal %w[second third], reloaded.to_a
+      assert_equal 'second', reloaded.to_a.first
+      assert_equal "third\nline", reloaded.to_a.last
+    end
+  end
+
+  def test_history_store_reads_legacy_line_based_history
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, '.chat_history')
+      File.write(path, "first\nsecond\n")
+
+      store = ChatBackend::HistoryStore.new(path: path, max_entries: 2)
+
+      assert_equal %w[first second], store.to_a
     end
   end
 end
