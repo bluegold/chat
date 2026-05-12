@@ -114,9 +114,10 @@ class CursesChatApp
     @system_prompt = load_system_prompt
     @input_queue = Queue.new
     @output_queue = Queue.new
-    @session_thread = ChatBackend::SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt)
+    @status = ChatBackend::Status.new
+    @session_thread = ChatBackend::SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt, @status)
     @input = CursesInput.new
-    @messages = []
+    @transcript = ChatBackend::Transcript.new
     @input_buffer = +''
     @input_cursor = 0
     @history_store = ChatBackend::HistoryStore.new(path: HISTORY_FILE, max_entries: MAX_HISTORY)
@@ -127,7 +128,6 @@ class CursesChatApp
     @mouse_debug = nil
     @debug_mouse_enabled = env_truthy?(ENV['TUI_CHAT_DEBUG_MOUSE']) || env_truthy?(ENV['TUI_CHAT_DEBUG'])
     @running = true
-    @pending_response = false
     @screen_ready = false
   end
 
@@ -176,17 +176,17 @@ class CursesChatApp
     when :resize
       nil
     when :backspace
-      delete_before_cursor unless @pending_response
+      delete_before_cursor unless response_pending?
     when :delete
-      delete_after_cursor unless @pending_response
+      delete_after_cursor unless response_pending?
     when :left
-      move_input_cursor(-1) unless @pending_response
+      move_input_cursor(-1) unless response_pending?
     when :right
-      move_input_cursor(1) unless @pending_response
+      move_input_cursor(1) unless response_pending?
     when :home
-      move_input_cursor_to(0) unless @pending_response
+      move_input_cursor_to(0) unless response_pending?
     when :end
-      move_input_cursor_to(input_length) unless @pending_response
+      move_input_cursor_to(input_length) unless response_pending?
     when :up
       recall_history(:up)
     when :down
@@ -208,7 +208,7 @@ class CursesChatApp
 
   def append_input(key)
     return unless key.is_a?(String)
-    return if @pending_response
+    return if response_pending?
 
     return unless key.match?(/\A[[:print:]]+\z/u)
 
@@ -222,9 +222,9 @@ class CursesChatApp
     scroll_to_bottom
     text = @input_buffer.dup
     return if text.strip.empty?
-    return if @pending_response
+    return if response_pending?
 
-    @messages << { role: :user, content: text }
+    @transcript.user_message(text)
     stored = @history_store.add(text)
     @input_history << stored if stored
     @input_history = @input_history.last(@history_store.max_entries)
@@ -275,32 +275,7 @@ class CursesChatApp
   end
 
   def handle_output_message(msg)
-    case msg[:type]
-    when :stream_start
-      @pending_response = true
-    when :assistant_start
-      @messages << { role: :assistant, content: +'' }
-    when :stream_chunk
-      append_assistant_chunk(msg[:content])
-    when :stream_end
-      @pending_response = false
-    when :system_message
-      @messages << { role: :system, content: msg[:content].to_s }
-    when :error
-      @messages << { role: :error, content: msg[:message].to_s }
-      @pending_response = false
-    end
-  end
-
-  def append_assistant_chunk(content)
-    text = content.to_s
-    return if text.empty?
-
-    if @messages.empty? || @messages[-1][:role] != :assistant
-      @messages << { role: :assistant, content: +'' }
-    end
-
-    @messages[-1][:content] << text
+    @transcript.apply_output_message(msg)
   end
 
   def draw
@@ -319,7 +294,7 @@ class CursesChatApp
   end
 
   def draw_header(cols)
-    status = @pending_response ? 'thinking...' : 'ready'
+    status = response_pending? ? 'thinking...' : 'ready'
     title = "RubyLLM Chat"
     model = @model.to_s
     prompt_state = @system_prompt && !@system_prompt.strip.empty? ? 'system prompt loaded' : 'no system prompt'
@@ -333,11 +308,7 @@ class CursesChatApp
     @transcript_visible_height = visible_height
     return if visible_height.zero?
 
-    lines = transcript_lines(@messages, cols)
-    max_scroll = [lines.length - visible_height, 0].max
-    @transcript_scroll = [[@transcript_scroll, 0].max, max_scroll].min
-    start_index = [lines.length - visible_height - @transcript_scroll, 0].max
-    visible_lines = lines[start_index, visible_height] || []
+    visible_lines = @transcript.window(cols, scroll: @transcript_scroll, height: visible_height)
 
     visible_lines.each_with_index do |line, idx|
       row = 1 + idx
@@ -347,7 +318,7 @@ class CursesChatApp
       Curses.stdscr.addstr(truncate_to_width(line, cols))
     end
 
-    if lines.empty?
+    if visible_lines.empty?
       Curses.stdscr.setpos(1, 0)
       Curses.stdscr.addstr(truncate_to_width('Type a message and press Enter.', cols))
     end
@@ -375,7 +346,7 @@ class CursesChatApp
   end
 
   def status_line
-    status = @pending_response ? 'thinking...' : 'ready'
+    status = response_pending? ? 'thinking...' : 'ready'
     prompt_state = @system_prompt && !@system_prompt.strip.empty? ? 'system prompt loaded' : 'no system prompt'
     scroll_value = @transcript_scroll.to_i
     scroll_state = scroll_value.positive? ? "scroll: #{scroll_value}" : 'scroll: bottom'
@@ -383,6 +354,10 @@ class CursesChatApp
     parts = ["model: #{@model}", status, prompt_state, scroll_state]
     parts << mouse_state if mouse_state
     parts.join(' | ')
+  end
+
+  def response_pending?
+    @status.pending? || @status.streaming?
   end
 
   def input_length

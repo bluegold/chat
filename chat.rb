@@ -21,12 +21,12 @@ class ChatCLI
     @output_queue = Queue.new
     @shutdown = false
     @system_prompt = load_system_prompt
-    @response_sync = ChatBackend::ResponseSync.new
-    @transcript = []
+    @status = ChatBackend::Status.new
+    @transcript = ChatBackend::Transcript.new
     @history_store = ChatBackend::HistoryStore.new(path: HISTORY_FILE, max_entries: MAX_HISTORY)
     load_history_into_reline
 
-    @session_thread = ChatBackend::SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt, @response_sync)
+    @session_thread = ChatBackend::SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt, @status)
   end
 
   def run
@@ -69,8 +69,8 @@ class ChatCLI
   def submit_input(content)
     @history_store.add(content)
     Reline::HISTORY.push(content)
-    @transcript << { role: :user, content: content }
-    @response_sync.expect_response
+    @transcript.user_message(content)
+    @status.expect_response
     @input_queue.push(type: :user_message, content: content)
   end
 
@@ -78,8 +78,8 @@ class ChatCLI
     loop do
       drain_output_queue
       render
-      render_input_zone(@response_sync.pending? || @response_sync.streaming? ? 'thinking...' : prompt_text)
-      break unless @response_sync.pending? || @response_sync.streaming?
+      render_input_zone(@status.pending? || @status.streaming? ? 'thinking...' : prompt_text)
+      break unless @status.pending? || @status.streaming?
 
       sleep 0.03
     end
@@ -109,31 +109,7 @@ class ChatCLI
   end
 
   def handle_output_message(msg)
-    case msg[:type]
-    when :stream_start
-      @transcript << { role: :assistant, content: +' ' }
-      @transcript[-1][:content].clear
-    when :stream_chunk
-      append_assistant_chunk(msg[:content])
-    when :stream_end
-      @response_sync.end_response
-    when :system_message
-      @transcript << { role: :system, content: msg[:content].to_s }
-    when :error
-      @transcript << { role: :error, content: msg[:message].to_s }
-      @response_sync.end_response
-    end
-  end
-
-  def append_assistant_chunk(content)
-    text = content.to_s
-    return if text.empty?
-
-    if @transcript.empty? || @transcript[-1][:role] != :assistant
-      @transcript << { role: :assistant, content: +'' }
-    end
-
-    @transcript[-1][:content] << text
+    @transcript.apply_output_message(msg)
   end
 
   def render
@@ -168,16 +144,20 @@ class ChatCLI
   def build_screen_lines(rows, cols)
     content_height = [rows - 2, 1].max
     header = header_line(cols)
-    transcript_lines = transcript_lines(@transcript, cols)
-    visible_lines = [header, *transcript_lines].last([content_height - 1, 0].max)
+    transcript = @transcript.window(cols, height: [content_height - 1, 0].max)
+    visible_lines = [header, *transcript]
     separator = '-' * [cols, 0].max
     [*visible_lines, separator]
   end
 
   def header_line(cols)
-    status = @response_sync.pending? || @response_sync.streaming? ? 'thinking...' : 'ready'
+    status = response_pending? ? 'thinking...' : 'ready'
     prompt_state = @system_prompt && !@system_prompt.strip.empty? ? 'system prompt loaded' : 'no system prompt'
     truncate_to_width("RubyLLM Chat | model: #{@model} | #{status} | #{prompt_state}", cols)
+  end
+
+  def response_pending?
+    @status.pending? || @status.streaming?
   end
 
   def terminal_size

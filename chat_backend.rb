@@ -4,99 +4,6 @@ require 'thread'
 require 'ruby_llm'
 
 module ChatBackend
-  class HistoryStore
-    attr_reader :path, :max_entries
-
-    def initialize(path:, max_entries: 1000)
-      @path = path
-      @max_entries = max_entries
-      @entries = []
-      load
-    end
-
-    def each(&block)
-      @entries.each(&block)
-    end
-
-    def to_a
-      @entries.dup
-    end
-
-    def add(entry)
-      text = entry.to_s
-      return if text.empty?
-
-      @entries << text
-      @entries = @entries.last(@max_entries)
-      save
-      text
-    end
-
-    def empty?
-      @entries.empty?
-    end
-
-    private
-
-    def load
-      return unless File.exist?(@path)
-
-      File.readlines(@path, chomp: true).each do |line|
-        next if line.empty?
-
-        @entries << line
-      end
-      @entries = @entries.last(@max_entries)
-    rescue StandardError
-      @entries = []
-    end
-
-    def save
-      File.write(@path, @entries.join("\n"))
-    rescue StandardError
-      # History is best-effort only.
-    end
-  end
-
-  class ResponseSync
-    def initialize
-      @mutex = Mutex.new
-      @condition = ConditionVariable.new
-      @expecting_response = false
-      @responding = false
-    end
-
-    def expect_response
-      @mutex.synchronize do
-        @expecting_response = true
-        @responding = false
-      end
-    end
-
-    def start_response
-      @mutex.synchronize do
-        @responding = true
-        @condition.broadcast
-      end
-    end
-
-    def end_response
-      @mutex.synchronize do
-        @responding = false
-        @expecting_response = false
-        @condition.broadcast
-      end
-    end
-
-    def pending?
-      @mutex.synchronize { @expecting_response }
-    end
-
-    def streaming?
-      @mutex.synchronize { @responding }
-    end
-  end
-
   module TextLayout
     def transcript_lines(messages, cols)
       Array(messages).flat_map { |message| format_message_lines(message, cols) }
@@ -175,6 +82,186 @@ module ChatBackend
       1
     end
   end
+
+  class Transcript
+    include TextLayout
+
+    attr_reader :messages
+
+    def initialize(messages = [])
+      @messages = Array(messages).map do |message|
+        {
+          role: message[:role],
+          content: message[:content].to_s
+        }
+      end
+    end
+
+    def user_message(content)
+      append_message(:user, content)
+    end
+
+    def assistant_start
+      return if last_role == :assistant
+
+      append_message(:assistant, +'')
+    end
+
+    def assistant_chunk(content)
+      text = content.to_s
+      return if text.empty?
+
+      assistant_start if last_role != :assistant
+      @messages[-1][:content] << text
+    end
+
+    def system_message(content)
+      append_message(:system, content)
+    end
+
+    def error_message(content)
+      append_message(:error, content)
+    end
+
+    def apply_output_message(msg)
+      case msg[:type]
+      when :stream_start, :assistant_start
+        assistant_start
+      when :stream_chunk
+        assistant_chunk(msg[:content])
+      when :system_message
+        system_message(msg[:content])
+      when :error
+        error_message(msg[:message])
+      end
+    end
+
+    def lines(cols)
+      transcript_lines(@messages, cols)
+    end
+
+    def tail_lines(cols, count)
+      return [] if count.to_i <= 0
+
+      lines(cols).last(count)
+    end
+
+    def window(cols, scroll: 0, height: nil)
+      lines = self.lines(cols)
+      height = height.to_i
+      return lines if height <= 0
+
+      max_scroll = [lines.length - height, 0].max
+      scroll = [[scroll.to_i, 0].max, max_scroll].min
+      start_index = [lines.length - height - scroll, 0].max
+      lines[start_index, height] || []
+    end
+
+    private
+
+    def append_message(role, content)
+      @messages << { role: role, content: content.to_s }
+    end
+
+    def last_role
+      @messages.empty? ? nil : @messages[-1][:role]
+    end
+  end
+
+  class HistoryStore
+    attr_reader :path, :max_entries
+
+    def initialize(path:, max_entries: 1000)
+      @path = path
+      @max_entries = max_entries
+      @entries = []
+      load
+    end
+
+    def each(&block)
+      @entries.each(&block)
+    end
+
+    def to_a
+      @entries.dup
+    end
+
+    def add(entry)
+      text = entry.to_s
+      return if text.empty?
+
+      @entries << text
+      @entries = @entries.last(@max_entries)
+      save
+      text
+    end
+
+    def empty?
+      @entries.empty?
+    end
+
+    private
+
+    def load
+      return unless File.exist?(@path)
+
+      File.readlines(@path, chomp: true).each do |line|
+        next if line.empty?
+
+        @entries << line
+      end
+      @entries = @entries.last(@max_entries)
+    rescue StandardError
+      @entries = []
+    end
+
+    def save
+      File.write(@path, @entries.join("\n"))
+    rescue StandardError
+      # History is best-effort only.
+    end
+  end
+
+  class Status
+    def initialize
+      @mutex = Mutex.new
+      @condition = ConditionVariable.new
+      @expecting_response = false
+      @responding = false
+    end
+
+    def expect_response
+      @mutex.synchronize do
+        @expecting_response = true
+        @responding = false
+      end
+    end
+
+    def start_response
+      @mutex.synchronize do
+        @responding = true
+        @condition.broadcast
+      end
+    end
+
+    def end_response
+      @mutex.synchronize do
+        @responding = false
+        @expecting_response = false
+        @condition.broadcast
+      end
+    end
+
+    def pending?
+      @mutex.synchronize { @expecting_response }
+    end
+
+    def streaming?
+      @mutex.synchronize { @responding }
+    end
+  end
+
+  ResponseSync = Status
 
   class SessionThread
     attr_reader :thread
