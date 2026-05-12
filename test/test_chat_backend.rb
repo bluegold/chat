@@ -291,7 +291,43 @@ class ChatBackendStatusLineTest < Minitest::Test
     object.instance_variable_set(:@debug_mouse_enabled, false)
     object.instance_variable_set(:@notice_message, nil)
 
-    assert_includes object.status_line, 'tools: 2'
+    assert_includes object.status_line, 'tools: 1(2)'
+  end
+
+  def test_status_line_shows_filtered_tool_count_when_hint_matches
+    agent = ChatBackend::AgentSpec.new(
+      name: 'coder',
+      display_name: nil,
+      model: 'gpt-4o-mini',
+      system_prompt: nil,
+      temperature: nil,
+      tools: %w[
+        search_files search_text read_file list_dir
+        memory_search memory_add memory_list memory_read memory_forget
+        run_ruby run_python
+      ]
+    )
+
+    object = Object.new
+    object.extend(ChatApp::SessionStatus)
+    object.extend(ChatApp::SessionInfo)
+    object.instance_variable_set(:@agent_name, 'coder')
+    object.instance_variable_set(:@agent, agent)
+    object.instance_variable_set(:@model, 'gpt-4o-mini')
+    object.instance_variable_set(:@status, ChatBackend::Status.new)
+    object.instance_variable_set(:@transcript_scroll, 0)
+    object.instance_variable_set(:@debug_mouse_enabled, false)
+    object.instance_variable_set(:@notice_message, nil)
+
+    object.instance_variable_set(:@tool_hint_features, [:filesystem])
+    object.instance_variable_get(:@status).expect_response
+    object.instance_variable_get(:@status).start_response
+
+    def object.current_input_text
+      ''
+    end
+
+    assert_includes object.status_line, 'tools: 5(11)'
   end
 
   def test_status_line_includes_tool_status_message
@@ -341,6 +377,42 @@ class ChatBackendSessionConfigTest < Minitest::Test
 
     assert_equal 'ChatGPT', spec.label
     assert_equal %w[search files], spec.tool_names
+  end
+
+  def test_agent_spec_resolves_tool_classes_and_filters_by_feature
+    spec = ChatBackend::AgentSpec.new(
+      name: 'coder',
+      display_name: 'ChatGPT',
+      model: 'gpt-4o-mini',
+      system_prompt: 'Be brief',
+      temperature: 0.8,
+      tools: %w[search_files run_ruby]
+    )
+
+    assert_equal(
+      [ChatApp::LocalTools::SearchFilesTool, ChatApp::CodeExecutionTools::RunRubyTool],
+      spec.tool_classes
+    )
+    assert_equal(
+      [ChatApp::LocalTools::SearchFilesTool],
+      spec.tool_classes_for_feature(:filesystem)
+    )
+  end
+
+  def test_agent_spec_uses_baseline_tools_when_no_hint_matches
+    spec = ChatBackend::AgentSpec.new(
+      name: 'coder',
+      display_name: 'ChatGPT',
+      model: 'gpt-4o-mini',
+      system_prompt: 'Be brief',
+      temperature: 0.8,
+      tools: %w[search_files search_text read_file list_dir memory_search run_ruby]
+    )
+
+    assert_equal(
+      [ChatApp::LocalTools::SearchFilesTool, ChatApp::LocalTools::SearchTextTool, ChatApp::MemoryTools::SearchTool],
+      spec.tool_classes_for_input('こんにちは')
+    )
   end
 
   def test_session_config_wraps_backend_dependencies

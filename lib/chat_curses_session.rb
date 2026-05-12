@@ -177,8 +177,11 @@ module ChatApp
       case msg[:type]
       when :tool_call
         start_tool_status(msg[:name])
-      when :tool_result, :stream_end, :error
+      when :stream_end, :error
         clear_tool_status
+        @tool_hint_features = nil
+      when :tool_result
+        nil
       end
     end
 
@@ -228,6 +231,7 @@ module ChatApp
       end
 
       @transcript.user_message(text)
+      @tool_hint_features = tool_hints_for(text)
       stored = @history_store.add(text)
       @input_history << stored if stored
       @input_history = @input_history.last(@history_store.max_entries)

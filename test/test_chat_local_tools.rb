@@ -7,6 +7,18 @@ require 'tmpdir'
 require_relative '../lib/chat_backend'
 
 class ChatBackendLocalToolsTest < Minitest::Test
+  def test_search_tools_expose_multiple_features
+    assert ChatApp::LocalTools::SearchFilesTool.supports_feature?(:filesystem)
+    assert ChatApp::LocalTools::SearchFilesTool.supports_feature?(:search)
+    refute ChatApp::LocalTools::SearchFilesTool.supports_feature?(:memory)
+  end
+
+  def test_local_tools_can_be_filtered_by_feature
+    tool_names = ChatApp::LocalTools.tool_classes_for_feature(:filesystem).map(&:tool_name)
+
+    assert_equal %w[list_dir read_file search_files search_text], tool_names.sort
+  end
+
   def test_search_files_tool_finds_matching_paths
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, 'app/models'))

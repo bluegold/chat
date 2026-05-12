@@ -4,6 +4,7 @@ require 'open3'
 require 'timeout'
 require 'yaml'
 require 'ruby_llm'
+require_relative 'chat_tool_features'
 
 module ChatApp
   module CodeExecutionTools
@@ -16,6 +17,14 @@ module ChatApp
 
     def self.tool_class(name)
       registered_tools[name.to_s]
+    end
+
+    def self.tool_classes
+      registered_tools.values
+    end
+
+    def self.tool_classes_for_feature(feature)
+      tool_classes.select { |tool_class| tool_class.supports_feature?(feature) }
     end
 
     def self.registered_tools
@@ -156,6 +165,8 @@ module ChatApp
     end
 
     class BaseTool < RubyLLM::Tool
+      extend ChatApp::ToolFeatures
+
       class << self
         def tool_name(value = nil)
           if value.nil?
@@ -210,6 +221,7 @@ module ChatApp
 
     class RunRubyTool < BaseTool
       tool_name 'run_ruby'
+      features :runtime, :code_execution, :ruby
       description 'Run Ruby code in a sandboxed bwrap environment.'
       param :code, desc: 'Ruby code to execute.'
       param :root, required: false, desc: 'Read-only project root.'
@@ -222,6 +234,7 @@ module ChatApp
 
     class RunPythonTool < BaseTool
       tool_name 'run_python'
+      features :runtime, :code_execution, :python
       description 'Run Python code in a sandboxed bwrap environment.'
       param :code, desc: 'Python code to execute.'
       param :root, required: false, desc: 'Read-only project root.'

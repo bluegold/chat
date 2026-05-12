@@ -3,6 +3,7 @@
 require 'find'
 require 'pathname'
 require 'ruby_llm'
+require_relative 'chat_tool_features'
 
 module ChatApp
   module LocalTools
@@ -19,11 +20,21 @@ module ChatApp
       registered_tools[name.to_s]
     end
 
+    def self.tool_classes
+      registered_tools.values
+    end
+
+    def self.tool_classes_for_feature(feature)
+      tool_classes.select { |tool_class| tool_class.supports_feature?(feature) }
+    end
+
     def self.registered_tools
       @registered_tools ||= {}
     end
 
     class BaseTool < RubyLLM::Tool
+      extend ChatApp::ToolFeatures
+
       class << self
         def tool_name(value = nil)
           if value.nil?
@@ -81,6 +92,7 @@ module ChatApp
 
     class SearchFilesTool < BaseTool
       tool_name 'search_files'
+      features :baseline, :filesystem, :search
       description 'Search file and directory names under a root directory.'
       param :query, desc: 'Substring to match against relative paths.'
       param :root, required: false, desc: 'Search root directory.'
@@ -129,6 +141,7 @@ module ChatApp
 
     class SearchTextTool < BaseTool
       tool_name 'search_text'
+      features :baseline, :filesystem, :search
       description 'Search text content under a root directory.'
       param :query, desc: 'Substring to find in file contents.'
       param :root, required: false, desc: 'Search root directory.'
@@ -182,6 +195,7 @@ module ChatApp
 
     class ReadFileTool < BaseTool
       tool_name 'read_file'
+      features :filesystem, :read
       description 'Read a file, optionally within a line range.'
       param :path, desc: 'Path to read relative to the root directory.'
       param :root, required: false, desc: 'Base directory.'
@@ -225,6 +239,7 @@ module ChatApp
 
     class ListDirTool < BaseTool
       tool_name 'list_dir'
+      features :filesystem, :list
       description 'List entries in a directory.'
       param :path, required: false, desc: 'Directory path relative to the root directory.'
       param :root, required: false, desc: 'Base directory.'

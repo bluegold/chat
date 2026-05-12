@@ -91,6 +91,7 @@ module ChatApp
       @history_store.add(content)
       Reline::HISTORY.push(content)
       @transcript.user_message(content)
+      @tool_hint_features = tool_hints_for(content)
       @status.expect_response
       @input_queue.push(type: :user_message, content: content)
     end
@@ -136,8 +137,11 @@ module ChatApp
         start_tool_status(msg[:name])
         puts
         puts tool_call_text(msg[:name], msg[:arguments])
-      when :tool_result, :stream_end, :error
+      when :stream_end, :error
         clear_tool_status
+        @tool_hint_features = nil
+        print_completed_output(msg)
+      when :tool_result
         print_completed_output(msg)
       end
     end
@@ -193,6 +197,10 @@ module ChatApp
 
     def prompt_text
       '> '
+    end
+
+    def current_input_text
+      Reline.line_buffer.to_s
     end
 
     def env_truthy?(value)

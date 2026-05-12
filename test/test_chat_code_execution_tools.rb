@@ -8,6 +8,22 @@ require_relative '../lib/chat_backend'
 require_relative '../lib/chat_code_execution_tools'
 
 class ChatBackendCodeExecutionToolsTest < Minitest::Test
+  def test_code_execution_tools_expose_multiple_features
+    assert ChatApp::CodeExecutionTools::RunRubyTool.supports_feature?(:runtime)
+    assert ChatApp::CodeExecutionTools::RunRubyTool.supports_feature?(:code_execution)
+  end
+
+  def test_code_execution_tools_distinguish_languages
+    assert ChatApp::CodeExecutionTools::RunRubyTool.supports_feature?(:ruby)
+    refute ChatApp::CodeExecutionTools::RunRubyTool.supports_feature?(:python)
+  end
+
+  def test_code_execution_tools_can_be_filtered_by_feature
+    tool_names = ChatApp::CodeExecutionTools.tool_classes_for_feature(:runtime).map(&:tool_name)
+
+    assert_equal %w[run_python run_ruby], tool_names.sort
+  end
+
   class FakeExecutor
     attr_reader :calls
 

@@ -5,8 +5,32 @@ require 'ruby_llm'
 require_relative 'chat_local_tools'
 require_relative 'chat_memory_tools'
 require_relative 'chat_code_execution_tools'
+require_relative 'chat_tool_hints'
 
 module ChatBackend
+  def self.tool_class_for(tool_name)
+    return tool_name if tool_name.is_a?(Class)
+    return tool_name if tool_name.respond_to?(:call)
+
+    tool_class = ChatApp::LocalTools.tool_class(tool_name) if defined?(ChatApp::LocalTools)
+    return tool_class if tool_class
+
+    tool_class = ChatApp::MemoryTools.tool_class(tool_name) if defined?(ChatApp::MemoryTools)
+    return tool_class if tool_class
+
+    tool_class = ChatApp::CodeExecutionTools.tool_class(tool_name) if defined?(ChatApp::CodeExecutionTools)
+    return tool_class if tool_class
+
+    case tool_name.to_s
+    when ''
+      nil
+    else
+      Object.const_get(tool_name.to_s)
+    end
+  rescue NameError
+    nil
+  end
+
   module TextLayout
     def transcript_line_entries(messages, cols)
       Array(messages).flat_map { |message| format_message_line_entries(message, cols) }
@@ -266,6 +290,8 @@ module ChatBackend
   end
 
   AgentSpec = Data.define(:name, :display_name, :model, :system_prompt, :temperature, :tools) do
+    include ChatApp::ToolHints
+
     def label
       display_name.to_s.strip.empty? ? name.to_s : display_name.to_s
     end
@@ -280,6 +306,34 @@ module ChatBackend
           tool.to_s
         end
       end
+    end
+
+    def tool_classes
+      Array(tools).filter_map { |tool| ChatBackend.tool_class_for(tool) }
+    end
+
+    def tool_classes_for_feature(feature)
+      tool_classes.select do |tool_class|
+        tool_class.respond_to?(:supports_feature?) && tool_class.supports_feature?(feature)
+      end
+    end
+
+    def tool_classes_for_features(features)
+      feature_list = Array(features).flatten.compact.map(&:to_sym).uniq
+      return tool_classes if feature_list.empty?
+
+      tool_classes.select do |tool_class|
+        feature_list.any? { |feature| tool_class.respond_to?(:supports_feature?) && tool_class.supports_feature?(feature) }
+      end
+    end
+
+    def tool_classes_for_input(text)
+      feature_list = tool_hints_for(text)
+      selected = tool_classes_for_feature(:baseline)
+      selected = tool_classes if selected.empty? && feature_list.empty?
+      selected += tool_classes_for_features(feature_list) if feature_list.any?
+      selected = tool_classes if selected.empty?
+      selected.uniq
     end
   end
 
@@ -536,6 +590,14 @@ module ChatBackend
     def tool_names
       agent&.tool_names || []
     end
+
+    def tool_classes
+      agent&.tool_classes || []
+    end
+
+    def tool_classes_for_input(text)
+      agent&.tool_classes_for_input(text) || []
+    end
   end
 
   class Status
@@ -585,6 +647,7 @@ module ChatBackend
     def initialize(config)
       @input_queue = config.input_queue
       @output_queue = config.output_queue
+      @agent = config.agent
       @system_prompt = config.system_prompt
       @tool_names = config.tool_names
       @response_sync = config.response_sync
@@ -631,7 +694,7 @@ module ChatBackend
     end
 
     def handle_user_message(content)
-      chat = build_chat
+      chat = build_chat(content)
       @history << { role: :user, content: content }
 
       @response_sync&.start_response
@@ -667,10 +730,10 @@ module ChatBackend
       @response_sync&.end_response
     end
 
-    def build_chat
+    def build_chat(content)
       chat = @llm.chat
       chat.with_instructions(@system_prompt) if @system_prompt && !@system_prompt.strip.empty?
-      apply_tools(chat)
+      apply_tools(chat, content)
       install_tool_callbacks(chat)
 
       @history.each do |message|
@@ -680,14 +743,18 @@ module ChatBackend
       chat
     end
 
-    def apply_tools(chat)
-      return chat unless @tool_names && !@tool_names.empty?
+    def apply_tools(chat, content)
+      tool_classes = if @agent.respond_to?(:tool_classes_for_input)
+                       @agent.tool_classes_for_input(content)
+                     else
+                       @tool_names.map { |tool_name| resolve_tool(tool_name) }.compact
+                     end
+      return chat unless tool_classes && !tool_classes.empty?
 
-      @tool_names.each do |tool_name|
+      tool_classes.each do |tool_class|
         next unless chat.respond_to?(:with_tool)
 
-        tool = resolve_tool(tool_name)
-        chat = chat.with_tool(tool) if tool
+        chat = chat.with_tool(tool_class)
       end
 
       chat
@@ -708,26 +775,7 @@ module ChatBackend
     end
 
     def resolve_tool(tool_name)
-      return tool_name if tool_name.is_a?(Class)
-      return tool_name if tool_name.respond_to?(:call)
-
-      tool_class = ChatApp::LocalTools.tool_class(tool_name) if defined?(ChatApp::LocalTools)
-      return tool_class if tool_class
-
-      tool_class = ChatApp::MemoryTools.tool_class(tool_name) if defined?(ChatApp::MemoryTools)
-      return tool_class if tool_class
-
-      tool_class = ChatApp::CodeExecutionTools.tool_class(tool_name) if defined?(ChatApp::CodeExecutionTools)
-      return tool_class if tool_class
-
-      case tool_name.to_s
-      when ''
-        nil
-      else
-        Object.const_get(tool_name.to_s)
-      end
-    rescue NameError
-      nil
+      ChatBackend.tool_class_for(tool_name)
     end
 
     def normalize_chunk(chunk)

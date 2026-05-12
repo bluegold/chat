@@ -6,6 +6,7 @@ require 'securerandom'
 require 'time'
 require 'yaml'
 require 'ruby_llm'
+require_relative 'chat_tool_features'
 
 module ChatApp
   module MemoryTools
@@ -21,6 +22,14 @@ module ChatApp
 
     def self.tool_class(name)
       registered_tools[name.to_s]
+    end
+
+    def self.tool_classes
+      registered_tools.values
+    end
+
+    def self.tool_classes_for_feature(feature)
+      tool_classes.select { |tool_class| tool_class.supports_feature?(feature) }
     end
 
     def self.registered_tools
@@ -268,6 +277,8 @@ module ChatApp
     end
 
     class BaseTool < RubyLLM::Tool
+      extend ChatApp::ToolFeatures
+
       class << self
         def tool_name(value = nil)
           if value.nil?
@@ -295,6 +306,7 @@ module ChatApp
 
     class SearchTool < BaseTool
       tool_name 'memory_search'
+      features :baseline, :memory, :search
       description 'Search global and project memory notes.'
       param :query, desc: 'Search text.'
       param :scope, required: false, desc: 'project, global, or both.'
@@ -314,6 +326,7 @@ module ChatApp
 
     class AddTool < BaseTool
       tool_name 'memory_add'
+      features :memory, :write
       description 'Add a memory note to project or global memory.'
       param :content, desc: 'Memory content.'
       param :title, required: false, desc: 'Optional memory title.'
@@ -329,6 +342,7 @@ module ChatApp
 
     class ListTool < BaseTool
       tool_name 'memory_list'
+      features :memory, :read
       description 'List memory notes.'
       param :scope, required: false, desc: 'project, global, or both.'
       param :limit, type: 'integer', required: false, desc: 'Maximum results.'
@@ -349,6 +363,7 @@ module ChatApp
 
     class ReadTool < BaseTool
       tool_name 'memory_read'
+      features :memory, :read
       description 'Read a memory note by id.'
       param :note_id, desc: 'Memory note id.'
       param :scope, required: false, desc: 'project, global, or both.'
@@ -364,6 +379,7 @@ module ChatApp
 
     class ForgetTool < BaseTool
       tool_name 'memory_forget'
+      features :memory, :write
       description 'Delete a memory note by id.'
       param :note_id, desc: 'Memory note id.'
       param :scope, required: false, desc: 'project, global, or both.'

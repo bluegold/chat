@@ -8,6 +8,18 @@ require_relative '../lib/chat_backend'
 require_relative '../lib/chat_memory_tools'
 
 class ChatBackendMemoryToolsTest < Minitest::Test
+  def test_memory_tools_expose_multiple_features
+    assert ChatApp::MemoryTools::SearchTool.supports_feature?(:memory)
+    assert ChatApp::MemoryTools::SearchTool.supports_feature?(:search)
+    refute ChatApp::MemoryTools::SearchTool.supports_feature?(:runtime)
+  end
+
+  def test_memory_tools_can_be_filtered_by_feature
+    tool_names = ChatApp::MemoryTools.tool_classes_for_feature(:write).map(&:tool_name)
+
+    assert_equal %w[memory_add memory_forget], tool_names.sort
+  end
+
   def with_memory_workspace
     Dir.mktmpdir do |workspace|
       project_dir = File.join(workspace, 'project')
