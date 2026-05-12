@@ -3,12 +3,14 @@
 
 require 'curses'
 require_relative 'chat_backend'
+require_relative 'chat_curses_input_render'
 require_relative 'chat_curses_input'
 require_relative 'chat_curses_session'
 
 module ChatApp
   class CursesUI
     include ChatBackend::TextLayout
+    include CursesInputRender
 
     def initialize(api_key, agent_registry:, agent_name:)
       @session = CursesSession.new(
@@ -68,13 +70,22 @@ module ChatApp
       cols = Curses.cols
       return if rows <= 0 || cols <= 0
 
+      input_state = input_render_state(
+        buffer: @session.input_buffer,
+        cursor: @session.input_cursor,
+        cols: cols,
+        max_height: [rows - 3, 1].max
+      )
+      transcript_height = [rows - input_state[:height] - 3, 0].max
+      @session.transcript_visible_height = transcript_height
+
       Curses.stdscr.erase
       draw_header(cols)
-      draw_transcript(rows, cols)
-      draw_separator(rows, cols)
-      draw_input(rows, cols)
+      draw_transcript(rows, cols, transcript_height)
+      draw_separator(rows, cols, transcript_height)
+      draw_input(rows, cols, input_state, transcript_height)
       draw_bottom_margin(rows, cols)
-      position_input_cursor(rows, cols)
+      position_input_cursor(rows, cols, input_state, transcript_height)
       Curses.stdscr.refresh
     rescue StandardError => e
       render_draw_error(e)
@@ -91,9 +102,7 @@ module ChatApp
       end
     end
 
-    def draw_transcript(rows, cols)
-      visible_height = [rows - 4, 0].max
-      @session.transcript_visible_height = visible_height
+    def draw_transcript(rows, cols, visible_height)
       return if visible_height.zero?
 
       visible_lines = @session.transcript.window_line_entries(
@@ -128,27 +137,26 @@ module ChatApp
       Curses.stdscr.addstr(truncate_to_width('Type a message and press Enter.', cols))
     end
 
-    def draw_separator(rows, cols)
+    def draw_separator(rows, cols, transcript_height)
       return if rows < 2
 
-      Curses.stdscr.setpos(rows - 3, 0)
+      Curses.stdscr.setpos(transcript_height + 1, 0)
       apply_row_color(6) do
         Curses.stdscr.addstr(padded_status_line(@session.status_line, cols))
       end
     end
 
-    def draw_input(rows, cols)
+    def draw_input(rows, cols, input_state, transcript_height)
       return if rows < 1
 
-      prefix = '> '
-      content_width = [cols - display_width(prefix), 0].max
-      visible_text, _cursor_x = @session.input_viewport(content_width)
-      line = "#{prefix}#{visible_text}"
-      visible_line = truncate_to_width(line, cols)
+      input_state[:lines].each_with_index do |line, idx|
+        row = transcript_height + 2 + idx
+        break if row >= rows - 1
 
-      Curses.stdscr.setpos(rows - 2, 0)
-      apply_row_color(7) do
-        Curses.stdscr.addstr(visible_line.ljust(cols))
+        Curses.stdscr.setpos(row, 0)
+        apply_row_color(7) do
+          Curses.stdscr.addstr(truncate_to_width(line, cols).ljust(cols))
+        end
       end
     end
 
@@ -161,14 +169,12 @@ module ChatApp
       end
     end
 
-    def position_input_cursor(rows, cols)
+    def position_input_cursor(rows, cols, input_state, transcript_height)
       return if rows < 1 || cols < 1
 
-      prefix = '> '
-      content_width = [cols - display_width(prefix), 0].max
-      _, cursor_x = @session.input_viewport(content_width)
-      cursor_col = [display_width(prefix) + cursor_x, cols - 1].min
-      Curses.stdscr.setpos(rows - 2, cursor_col)
+      cursor_row = transcript_height + 2 + input_state[:cursor_row]
+      cursor_col = [input_state[:cursor_col], cols - 1].min
+      Curses.stdscr.setpos(cursor_row, cursor_col)
     rescue StandardError
       nil
     end
