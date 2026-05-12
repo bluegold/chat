@@ -74,6 +74,7 @@ module ChatApp
       draw_separator(rows, cols)
       draw_input(rows, cols)
       draw_bottom_margin(rows, cols)
+      position_input_cursor(rows, cols)
       Curses.stdscr.refresh
     rescue StandardError => e
       render_draw_error(e)
@@ -95,14 +96,24 @@ module ChatApp
       @session.transcript_visible_height = visible_height
       return if visible_height.zero?
 
-      visible_lines = @session.transcript.window(cols, scroll: @session.transcript_scroll, height: visible_height)
+      visible_lines = @session.transcript.window_line_entries(
+        cols,
+        scroll: @session.transcript_scroll,
+        height: visible_height
+      )
 
-      visible_lines.each_with_index do |line, idx|
+      visible_lines.each_with_index do |entry, idx|
         row = 1 + idx
         break if row >= rows - 3
 
         Curses.stdscr.setpos(row, 0)
-        Curses.stdscr.addstr(truncate_to_width(line, cols))
+        if entry[:role] == :user
+          apply_row_color(7) do
+            Curses.stdscr.addstr(truncate_to_width(entry[:text], cols).ljust(cols))
+          end
+        else
+          Curses.stdscr.addstr(truncate_to_width(entry[:text], cols))
+        end
       end
 
       return unless visible_lines.empty?
@@ -125,7 +136,7 @@ module ChatApp
 
       prefix = '> '
       content_width = [cols - display_width(prefix), 0].max
-      visible_text, cursor_x = @session.input_viewport(content_width)
+      visible_text, _cursor_x = @session.input_viewport(content_width)
       line = "#{prefix}#{visible_text}"
       visible_line = truncate_to_width(line, cols)
 
@@ -133,7 +144,6 @@ module ChatApp
       apply_row_color(7) do
         Curses.stdscr.addstr(visible_line.ljust(cols))
       end
-      Curses.stdscr.setpos(rows - 2, [display_width(prefix) + cursor_x, cols - 1].min)
     end
 
     def draw_bottom_margin(rows, cols)
@@ -143,6 +153,18 @@ module ChatApp
       apply_row_color(7) do
         Curses.stdscr.addstr(' ' * cols)
       end
+    end
+
+    def position_input_cursor(rows, cols)
+      return if rows < 1 || cols < 1
+
+      prefix = '> '
+      content_width = [cols - display_width(prefix), 0].max
+      _, cursor_x = @session.input_viewport(content_width)
+      cursor_col = [display_width(prefix) + cursor_x, cols - 1].min
+      Curses.stdscr.setpos(rows - 2, cursor_col)
+    rescue StandardError
+      nil
     end
 
     def shutdown
@@ -179,10 +201,9 @@ module ChatApp
       Curses.use_default_colors if Curses.respond_to?(:use_default_colors)
       Curses.init_pair(5, Curses::COLOR_WHITE, Curses::COLOR_BLUE)
       if Curses.respond_to?(:can_change_color?) && Curses.can_change_color?
-        define_gray_background(8, 120)
-        define_gray_background(9, 80)
+        define_gray_background(8, 140)
         Curses.init_pair(6, Curses::COLOR_WHITE, 8)
-        Curses.init_pair(7, Curses::COLOR_WHITE, 9)
+        Curses.init_pair(7, Curses::COLOR_WHITE, 8)
       else
         Curses.init_pair(6, Curses::COLOR_WHITE, Curses::COLOR_BLACK)
         Curses.init_pair(7, Curses::COLOR_WHITE, Curses::COLOR_BLACK)

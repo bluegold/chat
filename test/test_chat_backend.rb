@@ -41,10 +41,10 @@ class ChatBackendTextLayoutTest < Minitest::Test
     )
 
     assert_equal [
-      'You:',
-      'hello',
       '',
-      'Assistant:',
+      '> hello',
+      '',
+      '',
       'world',
       ''
     ], lines
@@ -79,7 +79,7 @@ class ChatBackendTranscriptTest < Minitest::Test
   def test_transcript_lines_reads_back_message_buffer
     transcript = ChatBackend::Transcript.new([{ role: :user, content: 'hi' }])
 
-    assert_equal ['You:', 'hi', ''], transcript.lines(20)
+    assert_equal ['', '> hi', ''], transcript.lines(20)
   end
 
   def test_transcript_tail_lines_returns_bottom_slice
@@ -90,7 +90,7 @@ class ChatBackendTranscriptTest < Minitest::Test
       ]
     )
 
-    assert_equal ['Assistant:', 'world', ''], transcript.tail_lines(20, 3)
+    assert_equal ['', 'world', ''], transcript.tail_lines(20, 3)
   end
 
   def test_transcript_window_returns_bottom_window
@@ -101,7 +101,7 @@ class ChatBackendTranscriptTest < Minitest::Test
       ]
     )
 
-    assert_equal ['Assistant:', 'world', ''], transcript.window(20, height: 3, scroll: 0)
+    assert_equal ['', 'world', ''], transcript.window(20, height: 3, scroll: 0)
   end
 
   def test_transcript_window_returns_scrolled_window
@@ -112,7 +112,7 @@ class ChatBackendTranscriptTest < Minitest::Test
       ]
     )
 
-    assert_equal ['', 'Assistant:', 'world'], transcript.window(20, height: 3, scroll: 1)
+    assert_equal ['', '', 'world'], transcript.window(20, height: 3, scroll: 1)
   end
 end
 

@@ -5,23 +5,47 @@ require 'ruby_llm'
 
 module ChatBackend
   module TextLayout
-    def transcript_lines(messages, cols)
-      Array(messages).flat_map { |message| format_message_lines(message, cols) }
+    def transcript_line_entries(messages, cols)
+      Array(messages).flat_map { |message| format_message_line_entries(message, cols) }
     end
 
-    def format_message_lines(message, cols)
-      label = case message[:role]
-              when :user then 'You'
-              when :assistant then 'Assistant'
-              when :system then 'System'
-              when :error then 'Error'
-              else 'Message'
-              end
+    def transcript_lines(messages, cols)
+      transcript_line_entries(messages, cols).map { |entry| entry[:text] }
+    end
 
+    def format_message_line_entries(message, cols)
+      role = message[:role]
       content_lines = wrap_text(message[:content].to_s, cols)
       content_lines = [''] if content_lines.empty?
 
-      ["#{label}:", *content_lines, '']
+      case role
+      when :user
+        [
+          { role: :user, text: '' },
+          *prefixed_content_lines(content_lines, '> ', role: :user),
+          { role: :user, text: '' }
+        ]
+      when :assistant
+        [
+          { role: :assistant, text: '' },
+          *content_lines.map { |line| { role: :assistant, text: line } },
+          { role: :assistant, text: '' }
+        ]
+      when :system
+        [
+          { role: :system, text: 'System:' },
+          *content_lines.map { |line| { role: :system, text: line } },
+          { role: :system, text: '' }
+        ]
+      when :error
+        [{ role: :error, text: 'Error:' }, *content_lines.map { |line| { role: :error, text: line } }, { role: :error, text: '' }]
+      else
+        [
+          { role: :message, text: 'Message:' },
+          *content_lines.map { |line| { role: :message, text: line } },
+          { role: :message, text: '' }
+        ]
+      end
     end
 
     def wrap_text(text, width)
@@ -72,6 +96,13 @@ module ChatBackend
 
     def display_width(text)
       text.to_s.each_char.sum { |char| char_width(char) }
+    end
+
+    def prefixed_content_lines(content_lines, prefix, role:)
+      lines = Array(content_lines).dup
+      first_line = lines.shift.to_s
+      first_line = "#{prefix}#{first_line}"
+      [{ role: role, text: first_line }, *lines.map { |line| { role: role, text: line } }]
     end
 
     def char_width(char)
@@ -141,6 +172,21 @@ module ChatBackend
 
     def lines(cols)
       transcript_lines(@messages, cols)
+    end
+
+    def line_entries(cols)
+      transcript_line_entries(@messages, cols)
+    end
+
+    def window_line_entries(cols, scroll: 0, height: nil)
+      entries = line_entries(cols)
+      height = height.to_i
+      return entries if height <= 0
+
+      max_scroll = [entries.length - height, 0].max
+      scroll = scroll.to_i.clamp(0, max_scroll)
+      start_index = [entries.length - height - scroll, 0].max
+      entries[start_index, height] || []
     end
 
     def tail_lines(cols, count)
