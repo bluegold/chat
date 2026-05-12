@@ -2,67 +2,17 @@
 # frozen_string_literal: true
 
 require 'thread'
-require 'ruby_llm'
+require 'io/console'
 require 'reline'
+require_relative 'chat_backend'
 
 Thread.report_on_exception = true
 
-# Sync mechanism to wait for response completion
-class ResponseSync
-  def initialize
-    @mutex = Mutex.new
-    @condition = ConditionVariable.new
-    @expecting_response = false
-    @responding = false
-    @displaying = false
-  end
-
-  def expect_response
-    @mutex.synchronize do
-      @expecting_response = true
-      @responding = false
-      @displaying = false
-    end
-  end
-
-  def start_response
-    @mutex.synchronize do
-      @responding = true
-      @displaying = true
-      @condition.broadcast
-    end
-  end
-
-  def end_response
-    @mutex.synchronize do
-      @responding = false
-      @expecting_response = false
-      @condition.broadcast
-    end
-  end
-
-  def end_display
-    @mutex.synchronize do
-      @displaying = false
-      @condition.broadcast
-    end
-  end
-
-  def wait_for_completion
-    @mutex.synchronize do
-      @condition.wait(@mutex) until !@expecting_response || (@responding == false && @expecting_response == false)
-    end
-  end
-
-  def wait_for_display_complete
-    @mutex.synchronize do
-      @condition.wait(@mutex) until @displaying == false
-    end
-  end
-end
-
 class ChatCLI
+  include ChatBackend::TextLayout
+
   HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
+  MAX_HISTORY = 1000
 
   def initialize(api_key, model = 'gpt-4o-mini')
     @api_key = api_key
@@ -71,64 +21,192 @@ class ChatCLI
     @output_queue = Queue.new
     @shutdown = false
     @system_prompt = load_system_prompt
-    @response_sync = ResponseSync.new
-    @has_sent_message = false
+    @response_sync = ChatBackend::ResponseSync.new
+    @transcript = []
 
     load_history
 
-    @session_thread = SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt, @response_sync)
-    @output_thread = OutputThread.new(@output_queue, @response_sync)
+    @session_thread = ChatBackend::SessionThread.new(@input_queue, @output_queue, api_key, model, @system_prompt, @response_sync)
   end
 
   def run
+    setup_terminal
     main_loop
+  ensure
     shutdown
   end
 
   private
 
-  def main_loop
-    until @shutdown
-      input = read_input
-      break if input.nil? || input == '/exit'
-
-      next if input.empty?
-
-      add_to_history(input)
-      @response_sync.expect_response  # Mark that we're expecting a response
-      send_to_session(input)
-      
-      # Wait for response and display to complete
-      @response_sync.wait_for_completion
-      @response_sync.wait_for_display_complete
-    end
+  def setup_terminal
+    STDOUT.sync = true
+    print "\e[?25h"
   end
 
-  def send_to_session(content)
-    @output_queue.push(type: :system_message, content: "You: #{content}")
+  def main_loop
+    until @shutdown
+      drain_output_queue
+      render
+      render_input_zone(prompt_text)
+
+      input = read_input(prompt_text)
+      break if input.nil? || input == '/exit'
+      next if input.strip.empty?
+
+      submit_input(input)
+      wait_for_response
+    end
+  rescue Interrupt
+    @shutdown = true
+  end
+
+  def read_input(prompt)
+    Reline.readline(prompt, false)
+  rescue Interrupt
+    nil
+  end
+
+  def submit_input(content)
+    add_to_history(content)
+    @transcript << { role: :user, content: content }
+    @response_sync.expect_response
     @input_queue.push(type: :user_message, content: content)
+  end
+
+  def wait_for_response
+    loop do
+      drain_output_queue
+      render
+      render_input_zone(@response_sync.pending? || @response_sync.streaming? ? 'thinking...' : prompt_text)
+      break unless @response_sync.pending? || @response_sync.streaming?
+
+      sleep 0.03
+    end
+
+    drain_output_queue
+    render
+    render_input_zone(prompt_text)
   end
 
   def shutdown
     @shutdown = true
     save_history
     @input_queue.push(type: :shutdown)
-    @session_thread.join
-    @output_queue.push(type: :shutdown)
-    @output_thread.join
-    puts 'Goodbye!'
+    @session_thread&.join
+    print "\e[?25h"
+    puts
+  rescue StandardError
+    # Shutdown should not raise into the shell.
   end
 
-  def read_input
-    Reline.readline('> ', false)
+  def drain_output_queue
+    loop do
+      msg = @output_queue.pop(true)
+      handle_output_message(msg)
+    rescue ThreadError
+      break
+    end
+  end
+
+  def handle_output_message(msg)
+    case msg[:type]
+    when :stream_start
+      @transcript << { role: :assistant, content: +' ' }
+      @transcript[-1][:content].clear
+    when :stream_chunk
+      append_assistant_chunk(msg[:content])
+    when :stream_end
+      @response_sync.end_response
+    when :system_message
+      @transcript << { role: :system, content: msg[:content].to_s }
+    when :error
+      @transcript << { role: :error, content: msg[:message].to_s }
+      @response_sync.end_response
+    end
+  end
+
+  def append_assistant_chunk(content)
+    text = content.to_s
+    return if text.empty?
+
+    if @transcript.empty? || @transcript[-1][:role] != :assistant
+      @transcript << { role: :assistant, content: +'' }
+    end
+
+    @transcript[-1][:content] << text
+  end
+
+  def render
+    rows, cols = terminal_size
+    lines = build_screen_lines(rows, cols)
+
+    print "\e[2J\e[H"
+    lines.each do |line|
+      puts truncate_to_width(line, cols)
+    end
+  rescue StandardError
+    # Rendering should fail closed, not crash the chat loop.
+  end
+
+  def render_input_zone(prompt)
+    rows, cols = terminal_size
+    return if rows <= 0 || cols <= 0
+
+    status_line = "  #{prompt}"
+    print "\e[#{rows - 1};1H"
+    print "\e[K"
+    print truncate_to_width(status_line, cols)
+    $stdout.flush
+  rescue StandardError
+    # Input-zone rendering is best-effort.
+  end
+
+  def prompt_text
+    '> '
+  end
+
+  def build_screen_lines(rows, cols)
+    content_height = [rows - 2, 1].max
+    header = header_line(cols)
+    transcript_lines = transcript_lines(@transcript, cols)
+    visible_lines = [header, *transcript_lines].last([content_height - 1, 0].max)
+    separator = '-' * [cols, 0].max
+    [*visible_lines, separator]
+  end
+
+  def header_line(cols)
+    status = @response_sync.pending? || @response_sync.streaming? ? 'thinking...' : 'ready'
+    prompt_state = @system_prompt && !@system_prompt.strip.empty? ? 'system prompt loaded' : 'no system prompt'
+    truncate_to_width("RubyLLM Chat | model: #{@model} | #{status} | #{prompt_state}", cols)
+  end
+
+  def terminal_size
+    if IO.respond_to?(:console) && (console = IO.console)
+      rows, cols = console.winsize
+      rows = 24 if rows.nil? || rows <= 0
+      cols = 80 if cols.nil? || cols <= 0
+      [rows, cols]
+    else
+      rows = ENV.fetch('LINES', 24).to_i
+      cols = ENV.fetch('COLUMNS', 80).to_i
+      rows = 24 if rows <= 0
+      cols = 80 if cols <= 0
+      [rows, cols]
+    end
+  rescue StandardError
+    [24, 80]
   end
 
   def load_history
     return unless File.exist?(HISTORY_FILE)
 
     File.readlines(HISTORY_FILE, chomp: true).each do |line|
-      Reline::HISTORY.push(line) unless line.empty?
+      next if line.empty?
+
+      Reline::HISTORY.push(line)
     end
+  rescue StandardError
+    # History is best-effort only.
   end
 
   def add_to_history(input)
@@ -136,177 +214,20 @@ class ChatCLI
   end
 
   def save_history
-    history = Reline::HISTORY.to_a.last(1000) # Keep last 1000 entries
+    history = Reline::HISTORY.to_a.last(MAX_HISTORY)
     File.write(HISTORY_FILE, history.join("\n"))
+  rescue StandardError
+    # History is best-effort only.
   end
 
   def load_system_prompt
     system_prompt_file = File.join(Dir.pwd, '.system_prompt')
-    if File.exist?(system_prompt_file)
-      File.read(system_prompt_file)
-    else
-      nil
-    end
-  end
-end
+    return nil unless File.exist?(system_prompt_file)
 
-class SessionThread
-  def initialize(input_queue, output_queue, api_key, model, system_prompt = nil, response_sync = nil)
-    @input_queue = input_queue
-    @output_queue = output_queue
-    @api_key = api_key
-    @model = model
-    @system_prompt = system_prompt
-    @response_sync = response_sync
-    @history = []
-    @streaming = true
-
-    RubyLLM.configure do |config|
-      config.openai_api_key = api_key
-      config.default_model = model
-    end
-
-    @thread = Thread.new { run }
-  end
-
-  def join
-    @thread.join
-  end
-
-  private
-
-  def run
-    loop do
-      msg = @input_queue.pop
-      break if msg[:type] == :shutdown
-
-      begin
-        case msg[:type]
-        when :user_message
-          handle_user_message(msg[:content])
-        end
-      rescue => e
-        @output_queue.push(type: :error, message: "#{e.class}: #{e.message}\n  #{e.backtrace.first(5).join("\n  ")}")
-      end
-    end
-  end
-
-  def handle_user_message(content)
-    chat = RubyLLM.chat
-    
-    # Set system prompt if available
-    chat.with_instructions(@system_prompt) if @system_prompt
-    
-    # Add previous messages to chat context
-    @history.each do |msg|
-      if msg[:role] == 'user'
-        chat.say(msg[:content])
-      elsif msg[:role] == 'assistant'
-        chat.add_message(role: :assistant, content: msg[:content])
-      end
-    end
-    
-    # Start streaming response
-    @response_sync.start_response if @response_sync
-    @output_queue.push(type: :stream_start)
-    full_response = ''
-    
-    # Streaming response with block
-    chat.ask(content) do |chunk|
-      chunk_content = case
-                     when chunk.is_a?(String)
-                       chunk
-                     when chunk.respond_to?(:content)
-                       chunk.content
-                     when chunk.respond_to?(:text)
-                       chunk.text
-                     else
-                       chunk.to_s rescue ''
-                     end
-      # Skip nil/empty content
-      next if chunk_content.nil? || chunk_content.empty?
-      full_response += chunk_content
-      @output_queue.push(type: :stream_chunk, content: chunk_content)
-    end
-    
-    @output_queue.push(type: :stream_end)
-    @response_sync.end_response if @response_sync
-    @history << { role: 'user', content: content }
-    @history << { role: 'assistant', content: full_response }
-  end
-end
-
-class OutputThread
-  def initialize(output_queue, response_sync = nil)
-    @output_queue = output_queue
-    @response_sync = response_sync
-    @current_response = ''
-    @in_stream = false
-    @thread = Thread.new { run }
-  end
-
-  def join
-    @thread.join
-  end
-
-  private
-
-  def run
-    loop do
-      msg = @output_queue.pop
-      break if msg[:type] == :shutdown
-
-      begin
-        case msg[:type]
-        when :chat_response
-          print_chat(msg[:content])
-        when :stream_start
-          start_stream
-        when :stream_chunk
-          print_stream_chunk(msg[:content])
-        when :stream_end
-          end_stream
-        when :system_message
-          print_system(msg[:content])
-        when :error
-          print_error(msg[:content])
-        end
-      rescue => e
-        STDERR.puts "Output error: #{e.class}: #{e.message}\n  #{e.backtrace.first(5).join("\n  ")}"
-      end
-    end
-  end
-
-  def start_stream
-    @in_stream = true
-    @current_response = ''
-    print "\e[32mAssistant\e[0m: "
-    $stdout.flush
-  end
-
-  def print_stream_chunk(content)
-    return if content.nil? || content.empty?
-    print content
-    $stdout.flush
-    @current_response += content
-  end
-
-  def end_stream
-    puts
-    @in_stream = false
-    @response_sync.end_display if @response_sync
-  end
-
-  def print_chat(content)
-    puts "\e[32mAssistant\e[0m: #{content}"
-  end
-
-  def print_system(content)
-    puts "\e[33mSystem\e[0m: #{content}"
-  end
-
-  def print_error(content)
-    puts "\e[31mError\e[0m: #{content}"
+    content = File.read(system_prompt_file)
+    content.strip.empty? ? nil : content
+  rescue StandardError
+    nil
   end
 end
 
