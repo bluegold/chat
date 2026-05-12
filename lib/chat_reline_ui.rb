@@ -5,6 +5,8 @@ require 'reline'
 require_relative 'chat_backend'
 require_relative 'chat_agent_controls'
 require_relative 'chat_command_completion'
+require_relative 'chat_tool_tracking'
+require_relative 'chat_session_info'
 
 Thread.report_on_exception = true
 
@@ -13,6 +15,8 @@ module ChatApp
     include ChatBackend::TextLayout
     include AgentControls
     include CommandCompletion
+    include ToolTracking
+    include SessionInfo
 
     HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
     MAX_HISTORY = 1000
@@ -51,7 +55,7 @@ module ChatApp
         render_input_zone(prompt_text)
 
         input = read_input(prompt_text)
-        break if input.nil? || input == '/exit'
+        break if input.nil? || exit_command?(input)
         next if input.strip.empty?
 
         submit_input(input)
@@ -71,6 +75,12 @@ module ChatApp
       if agent_command?(content)
         agent_name = agent_name_from_command(content)
         select_agent(agent_name)
+        return
+      end
+
+      if session_info_command?(content)
+        @transcript.info_message(session_info_text)
+        @notice_message = nil
         return
       end
 
@@ -117,6 +127,12 @@ module ChatApp
 
     def handle_output_message(msg)
       @transcript.apply_output_message(msg)
+      case msg[:type]
+      when :tool_call
+        start_tool_status(msg[:name])
+      when :tool_result, :stream_end, :error
+        clear_tool_status
+      end
     end
 
     def start_session(agent_name)
@@ -171,8 +187,9 @@ module ChatApp
       lines = build_screen_lines(rows, cols)
 
       print "\e[2J\e[H"
-      lines.each do |line|
-        puts truncate_to_width(line, cols)
+      lines.each do |entry|
+        print render_entry(entry, cols)
+        print "\n"
       end
     rescue StandardError
       # Rendering should fail closed, not crash the chat loop.
@@ -198,15 +215,26 @@ module ChatApp
     def build_screen_lines(rows, cols)
       content_height = [rows - 2, 1].max
       header = header_line(cols)
-      transcript = @transcript.window(cols, height: [content_height - 1, 0].max)
-      visible_lines = [header, *transcript]
+      transcript = @transcript.window_line_entries(cols, height: [content_height - 1, 0].max)
+      visible_lines = [{ role: :header, text: header }, *transcript]
       separator = '-' * [cols, 0].max
-      [*visible_lines, separator]
+      [*visible_lines, { role: :separator, text: separator }]
+    end
+
+    def render_entry(entry, cols)
+      text = truncate_to_width(entry[:text], cols)
+
+      case entry[:role]
+      when :info
+        "\e[2m#{text}\e[0m"
+      else
+        text
+      end
     end
 
     def header_line(cols)
       agent_state = "agent: #{@agent&.label || @agent_name}"
-      parts = ["RubyLLM Chat", agent_state, "model: #{@model}", "status: #{status_code}"]
+      parts = ["RubyLLM Chat", agent_state, "model: #{@model}", "tools: #{tool_count}", "status: #{status_code}"]
       parts << @notice_message if @notice_message
       truncate_to_width(parts.join(' | '), cols)
     end

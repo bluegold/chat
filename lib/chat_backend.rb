@@ -2,6 +2,7 @@
 
 require 'yaml'
 require 'ruby_llm'
+require_relative 'chat_local_tools'
 
 module ChatBackend
   module TextLayout
@@ -37,6 +38,8 @@ module ChatBackend
           *content_lines.map { |line| { role: :system, text: line } },
           { role: :system, text: '' }
         ]
+      when :info
+        content_lines.map { |line| { role: :info, text: line } }
       when :error
         [{ role: :error, text: 'Error:' }, *content_lines.map { |line| { role: :error, text: line } }, { role: :error, text: '' }]
       else
@@ -98,6 +101,41 @@ module ChatBackend
       text.to_s.each_char.sum { |char| char_width(char) }
     end
 
+    def tool_call_text(tool_name, arguments = nil)
+      details = tool_arguments_text(arguments)
+      details.empty? ? "Using tool #{tool_name}" : "Using tool #{tool_name}(#{details})"
+    end
+
+    def tool_arguments_text(arguments)
+      case arguments
+      when nil
+        ''
+      when String
+        arguments.strip
+      when Hash
+        arguments.map { |key, value| "#{key}: #{tool_value_text(value)}" }.join(', ')
+      when Array
+        arguments.map { |value| tool_value_text(value) }.join(', ')
+      else
+        arguments.to_s.strip
+      end
+    end
+
+    def tool_value_text(value)
+      case value
+      when String
+        value.include?("'") ? value.inspect : "'#{value}'"
+      when TrueClass, FalseClass, Numeric
+        value.to_s
+      when Array
+        "[#{value.map { |item| tool_value_text(item) }.join(', ')}]"
+      when Hash
+        "{#{value.map { |key, item| "#{key}: #{tool_value_text(item)}" }.join(', ')}}"
+      else
+        value.inspect
+      end
+    end
+
     def prefixed_content_lines(content_lines, prefix, role:)
       lines = Array(content_lines).dup
       first_line = lines.shift.to_s
@@ -153,6 +191,10 @@ module ChatBackend
       append_message(:system, content)
     end
 
+    def info_message(content)
+      append_message(:info, content)
+    end
+
     def error_message(content)
       append_message(:error, content)
     end
@@ -165,6 +207,10 @@ module ChatBackend
         assistant_chunk(msg[:content])
       when :system_message
         system_message(msg[:content])
+      when :info_message
+        info_message(msg[:content])
+      when :tool_call
+        info_message(tool_call_text(msg[:name], msg[:arguments]))
       when :error
         error_message(msg[:message])
       end
@@ -223,7 +269,15 @@ module ChatBackend
     end
 
     def tool_names
-      Array(tools).map(&:to_s)
+      Array(tools).filter_map do |tool|
+        if tool.respond_to?(:tool_name) && !tool.tool_name.to_s.strip.empty?
+          tool.tool_name.to_s
+        elsif tool.respond_to?(:name) && tool.class < RubyLLM::Tool
+          tool.name.to_s
+        else
+          tool.to_s
+        end
+      end
     end
   end
 
@@ -586,6 +640,7 @@ module ChatBackend
       chat = @llm.chat
       chat.with_instructions(@system_prompt) if @system_prompt && !@system_prompt.strip.empty?
       apply_tools(chat)
+      install_tool_callbacks(chat)
 
       @history.each do |message|
         chat.add_message(role: message[:role], content: message[:content])
@@ -607,8 +662,26 @@ module ChatBackend
       chat
     end
 
+    def install_tool_callbacks(chat)
+      return chat unless chat.respond_to?(:before_tool_call) && chat.respond_to?(:after_tool_result)
+
+      current_tool_name = nil
+      chat.before_tool_call do |tool_call|
+        current_tool_name = tool_call.name.to_s
+        @output_queue.push(type: :tool_call, name: current_tool_name, arguments: tool_call.arguments)
+      end
+      chat.after_tool_result do |result|
+        @output_queue.push(type: :tool_result, name: current_tool_name.to_s, result: result)
+      end
+      chat
+    end
+
     def resolve_tool(tool_name)
+      return tool_name if tool_name.is_a?(Class)
       return tool_name if tool_name.respond_to?(:call)
+
+      tool_class = ChatApp::LocalTools.tool_class(tool_name) if defined?(ChatApp::LocalTools)
+      return tool_class if tool_class
 
       case tool_name.to_s
       when ''

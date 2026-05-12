@@ -4,8 +4,11 @@ require_relative 'chat_backend'
 require_relative 'chat_agent_controls'
 require_relative 'chat_command_completion'
 require_relative 'chat_curses_mouse'
+require_relative 'chat_cursor_editing'
 require_relative 'chat_scroll_controls'
+require_relative 'chat_tool_tracking'
 require_relative 'chat_session_status'
+require_relative 'chat_session_info'
 
 Thread.report_on_exception = true
 
@@ -15,8 +18,11 @@ module ChatApp
     include AgentControls
     include CommandCompletion
     include CursesMouse
+    include CursorEditing
     include ScrollControls
+    include ToolTracking
     include SessionStatus
+    include SessionInfo
 
     HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
     MAX_HISTORY = 1000
@@ -168,6 +174,12 @@ module ChatApp
 
     def handle_output_message(msg)
       @transcript.apply_output_message(msg)
+      case msg[:type]
+      when :tool_call
+        start_tool_status(msg[:name])
+      when :tool_result, :stream_end, :error
+        clear_tool_status
+      end
     end
 
     def append_input(key)
@@ -189,6 +201,25 @@ module ChatApp
 
       if agent_command?(text)
         select_agent(agent_name_from_command(text))
+        @input_buffer = +''
+        @input_cursor = 0
+        @history_index = -1
+        @history_draft = nil
+        return
+      end
+
+      if exit_command?(text)
+        @running = false
+        @input_buffer = +''
+        @input_cursor = 0
+        @history_index = -1
+        @history_draft = nil
+        return
+      end
+
+      if session_info_command?(text)
+        @transcript.info_message(session_info_text)
+        @notice_message = nil
         @input_buffer = +''
         @input_cursor = 0
         @history_index = -1
@@ -235,35 +266,6 @@ module ChatApp
       end
 
       @input_cursor = input_length
-    end
-
-    def input_length
-      @input_buffer.each_char.count
-    end
-
-    def move_input_cursor(delta)
-      move_input_cursor_to(@input_cursor + delta)
-    end
-
-    def move_input_cursor_to(position)
-      @input_cursor = position.clamp(0, input_length)
-    end
-
-    def delete_before_cursor
-      return if @input_cursor <= 0
-
-      chars = @input_buffer.each_char.to_a
-      chars.delete_at(@input_cursor - 1)
-      @input_buffer = chars.join
-      @input_cursor -= 1
-    end
-
-    def delete_after_cursor
-      return if @input_cursor >= input_length
-
-      chars = @input_buffer.each_char.to_a
-      chars.delete_at(@input_cursor)
-      @input_buffer = chars.join
     end
 
     def start_session(agent_name)

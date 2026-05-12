@@ -80,6 +80,7 @@ module ChatApp
     def command_replacements(prefix)
       commands = []
       commands << '/agent ' if 'agent'.start_with?(prefix.to_s)
+      commands << '/session_info' if 'session_info'.start_with?(prefix.to_s)
       commands << '/exit' if 'exit'.start_with?(prefix.to_s)
       commands
     end

@@ -111,6 +111,12 @@ module ChatApp
           apply_row_color(7) do
             Curses.stdscr.addstr(truncate_to_width(entry[:text], cols).ljust(cols))
           end
+        elsif entry[:role] == :info
+          apply_row_color(7) do
+            apply_dim_text do
+              Curses.stdscr.addstr(truncate_to_width(entry[:text], cols).ljust(cols))
+            end
+          end
         else
           Curses.stdscr.addstr(truncate_to_width(entry[:text], cols))
         end
@@ -215,6 +221,16 @@ module ChatApp
     def apply_row_color(pair_id, &block)
       if Curses.respond_to?(:color_pair) && Curses.has_colors?
         Curses.stdscr.attron(Curses.color_pair(pair_id), &block)
+      else
+        block.call
+      end
+    rescue StandardError
+      block.call
+    end
+
+    def apply_dim_text(&block)
+      if Curses.respond_to?(:A_DIM)
+        Curses.stdscr.attron(Curses::A_DIM, &block)
       else
         block.call
       end
