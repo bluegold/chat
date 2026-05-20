@@ -5,9 +5,11 @@ require 'ruby_llm'
 require_relative 'chat_local_tools'
 require_relative 'chat_memory_tools'
 require_relative 'chat_code_execution_tools'
+require_relative 'chat_web_tools'
 require_relative 'chat_tool_hints'
 
 module ChatBackend
+  # rubocop:disable Metrics/PerceivedComplexity
   def self.tool_class_for(tool_name)
     return tool_name if tool_name.is_a?(Class)
     return tool_name if tool_name.respond_to?(:call)
@@ -21,6 +23,9 @@ module ChatBackend
     tool_class = ChatApp::CodeExecutionTools.tool_class(tool_name) if defined?(ChatApp::CodeExecutionTools)
     return tool_class if tool_class
 
+    tool_class = ChatApp::WebTools.tool_class(tool_name) if defined?(ChatApp::WebTools)
+    return tool_class if tool_class
+
     case tool_name.to_s
     when ''
       nil
@@ -30,6 +35,7 @@ module ChatBackend
   rescue NameError
     nil
   end
+  # rubocop:enable Metrics/PerceivedComplexity
 end
 
 require_relative 'chat_text_layout'
