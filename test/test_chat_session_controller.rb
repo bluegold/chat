@@ -131,6 +131,23 @@ class ChatSessionControllerTest < Minitest::Test
     controller.shutdown_session
   end
 
+  def test_start_session_closes_previous_session
+    controller = ChatApp::SessionController.new(
+      api_key: 'fake_key',
+      agent_registry: @registry,
+      llm: FakeLLM
+    )
+    controller.start_session('coder')
+    first_thread = controller.session_thread
+
+    controller.start_session('helper')
+
+    refute_predicate first_thread, :alive?
+    assert_equal 'helper', controller.agent.name
+
+    controller.shutdown_session
+  end
+
   def test_send_message_pushes_to_input_queue
     controller = ChatApp::SessionController.new(
       api_key: 'fake_key',

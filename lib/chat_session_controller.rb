@@ -23,6 +23,8 @@ module ChatApp
     end
 
     def start_session(agent_name)
+      shutdown_session if @session_thread
+
       @agent = @agent_registry[agent_name] || @agent_registry.default_agent
       raise ArgumentError, "unknown agent #{agent_name.inspect}" unless @agent
 

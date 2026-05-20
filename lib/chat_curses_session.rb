@@ -131,6 +131,22 @@ module ChatApp
       super(@input_buffer, @input_cursor, available_width)
     end
 
+    def scroll_transcript(delta)
+      @scroll_state.scroll_by(delta)
+    end
+
+    def scroll_to_bottom
+      @scroll_state.scroll_to_bottom
+    end
+
+    def page_scroll_amount
+      @scroll_state.page_scroll_amount
+    end
+
+    def wheel_scroll_amount
+      @scroll_state.wheel_scroll_amount
+    end
+
     def append_input(key)
       return unless key.is_a?(String)
       return if response_pending?
