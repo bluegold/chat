@@ -2,6 +2,7 @@
 
 require 'io/console'
 require 'reline'
+require 'forwardable'
 require_relative 'chat_backend'
 require_relative 'chat_command_parser'
 require_relative 'chat_command_completer'
@@ -9,11 +10,14 @@ require_relative 'chat_tool_tracking'
 require_relative 'chat_status_line_formatter'
 require_relative 'chat_tool_hints'
 require_relative 'chat_session_info'
+require_relative 'chat_session_controller'
 
 Thread.report_on_exception = true
 
 module ChatApp
   class RelineUI
+    extend Forwardable
+
     include ChatBackend::TextLayout
     include ToolTracking
     include SessionInfo
@@ -22,6 +26,10 @@ module ChatApp
     HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
     MAX_HISTORY = 1000
 
+    def_delegators :@session_controller, :status, :transcript, :session_thread,
+                   :input_queue, :output_queue, :model, :system_prompt, :agent,
+                   :status_code, :response_pending?
+
     def initialize(api_key, agent_registry:, agent_name:)
       @api_key = api_key
       @agent_registry = agent_registry
@@ -29,12 +37,11 @@ module ChatApp
       @command_parser = CommandParser.new(@agent_registry)
       @command_completer = CommandCompleter.new(@agent_registry.names)
       @debug_enabled = env_truthy?(ENV.fetch('CHAT_DEBUG', nil)) || env_truthy?(ENV.fetch('CHAT_RELINE_DEBUG', nil))
-      @input_queue = Queue.new
-      @output_queue = Queue.new
       @shutdown = false
       @history_store = ChatBackend::HistoryStore.new(path: HISTORY_FILE, max_entries: MAX_HISTORY)
+      @session_controller = SessionController.new(api_key: @api_key, agent_registry: @agent_registry)
       load_history_into_reline
-      start_session(@agent_name)
+      @session_controller.start_session(@agent_name)
       install_completion
     end
 
@@ -84,24 +91,23 @@ module ChatApp
       end
 
       if @command_parser.session_info_command?(content)
-        @transcript.info_message(session_info_text)
+        transcript.info_message(session_info_text)
         @notice_message = nil
         return
       end
 
       @history_store.add(content)
       Reline::HISTORY.push(content)
-      @transcript.user_message(content)
+      transcript.user_message(content)
       @tool_hint_features = tool_hints_for(content)
-      @status.expect_response
-      @input_queue.push(type: :user_message, content: content)
+      @session_controller.send_message(content)
     end
 
     def wait_for_response
       debug_log('waiting for response')
       loop do
         drain_output_queue
-        break unless @status.pending? || @status.streaming?
+        break unless status&.pending? || status&.streaming?
 
         sleep 0.03
       end
@@ -113,14 +119,14 @@ module ChatApp
     def shutdown
       @shutdown = true
       restore_completion
-      shutdown_session
+      @session_controller.shutdown_session
     rescue StandardError => e
       debug_exception('shutdown', e)
     end
 
     def drain_output_queue
       loop do
-        msg = @output_queue.pop(true)
+        msg = output_queue.pop(true)
         handle_output_message(msg)
       rescue ThreadError
         break
@@ -132,7 +138,7 @@ module ChatApp
 
     def handle_output_message(msg)
       debug_log("output: #{msg[:type]}")
-      @transcript.apply_output_message(msg)
+      transcript.apply_output_message(msg)
       case msg[:type]
       when :tool_call
         start_tool_status(msg[:name])
@@ -147,53 +153,18 @@ module ChatApp
       end
     end
 
-    def start_session(agent_name)
-      agent = @command_parser.resolve_agent(agent_name)
-      @agent = agent
-      @model = agent.model
-      @system_prompt = agent.system_prompt
-      @status = ChatBackend::Status.new
-      @transcript = ChatBackend::Transcript.new
-      @input_queue = Queue.new
-      @output_queue = Queue.new
-
-      session_config = ChatBackend::SessionConfig.new(
-        input_queue: @input_queue,
-        output_queue: @output_queue,
-        api_key: @api_key,
-        agent: agent,
-        response_sync: @status,
-        llm: RubyLLM
-      )
-      @session_thread = ChatBackend::SessionThread.new(session_config)
-      debug_log("session started: #{agent.name}")
-    end
-
     def select_agent(agent_name)
       agent_name = agent_name.to_s.strip
       return if agent_name.empty?
 
-      agent = @agent_registry[agent_name]
-      unless agent
+      new_agent = @session_controller.select_agent(agent_name)
+      unless new_agent
         @notice_message = "unknown agent: #{agent_name}"
         return
       end
 
-      return if @agent&.name == agent.name
-
-      shutdown_session
-      start_session(agent.name)
-      @notice_message = "switched to #{agent.name}"
-    end
-
-    def shutdown_session
-      return unless @session_thread
-
-      @input_queue.push(type: :shutdown)
-      @session_thread.join
-    rescue StandardError => e
-      debug_exception('shutdown_session', e)
-      nil
+      @agent_name = new_agent.name
+      @notice_message = "switched to #{new_agent.name}"
     end
 
     def prompt_text
@@ -225,7 +196,7 @@ module ChatApp
     def print_completed_output(msg)
       case msg[:type]
       when :stream_end
-        assistant = @transcript.messages.reverse.find { |message| message[:role] == :assistant && !message[:content].to_s.empty? }
+        assistant = transcript.messages.reverse.find { |message| message[:role] == :assistant && !message[:content].to_s.empty? }
         return unless assistant
 
         puts
@@ -241,7 +212,7 @@ module ChatApp
     end
 
     def load_system_prompt
-      @agent&.system_prompt
+      agent&.system_prompt
     end
 
     def install_completion
