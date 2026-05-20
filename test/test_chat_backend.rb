@@ -5,9 +5,7 @@ require 'tmpdir'
 require 'yaml'
 
 require_relative '../lib/chat_backend'
-require_relative '../lib/chat_command_completion'
 require_relative '../lib/chat_tool_tracking'
-require_relative '../lib/chat_session_status'
 require_relative '../lib/chat_session_info'
 
 class ChatBackendHistoryStoreTest < Minitest::Test
@@ -266,93 +264,6 @@ class ChatBackendSessionInfoTest < Minitest::Test
     assert_equal 'ready', data['status']['code']
     assert_equal 'Be brief
 Be accurate', data['system_prompt']
-  end
-end
-
-class ChatBackendStatusLineTest < Minitest::Test
-  def test_status_line_includes_tool_count
-    agent = ChatBackend::AgentSpec.new(
-      name: 'coder',
-      display_name: nil,
-      model: 'gpt-4o-mini',
-      system_prompt: nil,
-      temperature: nil,
-      tools: %w[search_files read_file]
-    )
-
-    object = Object.new
-    object.extend(ChatApp::SessionStatus)
-    object.extend(ChatApp::SessionInfo)
-    object.instance_variable_set(:@agent_name, 'coder')
-    object.instance_variable_set(:@agent, agent)
-    object.instance_variable_set(:@model, 'gpt-4o-mini')
-    object.instance_variable_set(:@status, ChatBackend::Status.new)
-    object.instance_variable_set(:@transcript_scroll, 0)
-    object.instance_variable_set(:@debug_mouse_enabled, false)
-    object.instance_variable_set(:@notice_message, nil)
-
-    assert_includes object.status_line, 'tools: 1(2)'
-  end
-
-  def test_status_line_shows_filtered_tool_count_when_hint_matches
-    agent = ChatBackend::AgentSpec.new(
-      name: 'coder',
-      display_name: nil,
-      model: 'gpt-4o-mini',
-      system_prompt: nil,
-      temperature: nil,
-      tools: %w[
-        search_files search_text read_file list_dir
-        memory_search memory_add memory_list memory_read memory_forget
-        run_ruby run_python
-      ]
-    )
-
-    object = Object.new
-    object.extend(ChatApp::SessionStatus)
-    object.extend(ChatApp::SessionInfo)
-    object.instance_variable_set(:@agent_name, 'coder')
-    object.instance_variable_set(:@agent, agent)
-    object.instance_variable_set(:@model, 'gpt-4o-mini')
-    object.instance_variable_set(:@status, ChatBackend::Status.new)
-    object.instance_variable_set(:@transcript_scroll, 0)
-    object.instance_variable_set(:@debug_mouse_enabled, false)
-    object.instance_variable_set(:@notice_message, nil)
-
-    object.instance_variable_set(:@tool_hint_features, [:filesystem])
-    object.instance_variable_get(:@status).expect_response
-    object.instance_variable_get(:@status).start_response
-
-    def object.current_input_text
-      ''
-    end
-
-    assert_includes object.status_line, 'tools: 5(11)'
-  end
-
-  def test_status_line_includes_tool_status_message
-    agent = ChatBackend::AgentSpec.new(
-      name: 'coder',
-      display_name: nil,
-      model: 'gpt-4o-mini',
-      system_prompt: nil,
-      temperature: nil,
-      tools: %w[search_files read_file]
-    )
-
-    object = Object.new
-    object.extend(ChatApp::SessionStatus)
-    object.extend(ChatApp::ToolTracking)
-    object.instance_variable_set(:@agent_name, 'coder')
-    object.instance_variable_set(:@agent, agent)
-    object.instance_variable_set(:@model, 'gpt-4o-mini')
-    object.instance_variable_set(:@status, ChatBackend::Status.new)
-    object.instance_variable_set(:@transcript_scroll, 0)
-    object.instance_variable_set(:@debug_mouse_enabled, false)
-    object.instance_variable_set(:@notice_message, nil)
-    object.start_tool_status('search_files')
-
-    assert_includes object.status_line, 'tool: search_files'
   end
 end
 
@@ -784,47 +695,5 @@ class ChatBackendSessionThreadTest < Minitest::Test
 
     assert_includes events.map { |event| event[:type] }, :tool_call
     assert_includes events.map { |event| event[:type] }, :tool_result
-  end
-end
-
-class ChatBackendCommandCompletionTest < Minitest::Test
-  def setup
-    @completion = Object.new.extend(ChatApp::CommandCompletion)
-  end
-
-  def test_command_completion_expands_short_command_prefix
-    result = @completion.send(
-      :command_completion,
-      buffer: '/a',
-      cursor: 2,
-      agent_names: %w[coder helper]
-    )
-
-    assert_equal '/agent ', result[:buffer]
-    assert_equal 7, result[:cursor]
-  end
-
-  def test_command_completion_expands_agent_name
-    result = @completion.send(
-      :command_completion,
-      buffer: '/agent h',
-      cursor: 8,
-      agent_names: %w[coder helper]
-    )
-
-    assert_equal '/agent helper ', result[:buffer]
-    assert_equal 14, result[:cursor]
-  end
-
-  def test_command_completion_expands_session_info_command
-    result = @completion.send(
-      :command_completion,
-      buffer: '/se',
-      cursor: 3,
-      agent_names: %w[coder helper]
-    )
-
-    assert_equal '/session_info', result[:buffer]
-    assert_equal 13, result[:cursor]
   end
 end

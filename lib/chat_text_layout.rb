@@ -17,33 +17,23 @@ module ChatBackend
 
       case role
       when :user
-        [
-          { role: :user, text: '' },
-          *prefixed_content_lines(content_lines, '> ', role: :user),
-          { role: :user, text: '' }
-        ]
+        [{ role: :user, text: '' }, *prefixed_content_lines(content_lines, '> ', role: :user), { role: :user, text: '' }]
       when :assistant
-        [
-          { role: :assistant, text: '' },
-          *content_lines.map { |line| { role: :assistant, text: line } },
-          { role: :assistant, text: '' }
-        ]
+        [{ role: :assistant, text: '' }, *content_lines.map do |line|
+          { role: :assistant, text: line }
+        end, { role: :assistant, text: '' }]
       when :system
-        [
-          { role: :system, text: 'System:' },
-          *content_lines.map { |line| { role: :system, text: line } },
-          { role: :system, text: '' }
-        ]
+        [{ role: :system, text: 'System:' }, *content_lines.map do |line|
+          { role: :system, text: line }
+        end, { role: :system, text: '' }]
       when :info
         content_lines.map { |line| { role: :info, text: line } }
       when :error
         [{ role: :error, text: 'Error:' }, *content_lines.map { |line| { role: :error, text: line } }, { role: :error, text: '' }]
       else
-        [
-          { role: :message, text: 'Message:' },
-          *content_lines.map { |line| { role: :message, text: line } },
-          { role: :message, text: '' }
-        ]
+        [{ role: :message, text: 'Message:' }, *content_lines.map do |line|
+          { role: :message, text: line }
+        end, { role: :message, text: '' }]
       end
     end
 
@@ -148,6 +138,41 @@ module ChatBackend
       )
 
       1
+    end
+
+    def input_viewport(buffer, cursor, available_width)
+      available_width = [available_width, 0].max
+      chars = buffer.to_s.each_char.to_a
+      widths = chars.map { |char| display_width(char) }
+      cursor_index = cursor.clamp(0, chars.length)
+      cursor_width = widths[0...cursor_index].sum
+      total_width = widths.sum
+
+      return [buffer.dup, cursor_width] if total_width <= available_width
+
+      start_width = [cursor_width - available_width + 1, 0].max
+      start_index = 0
+      consumed = 0
+
+      while start_index < chars.length && consumed + widths[start_index] <= start_width
+        consumed += widths[start_index]
+        start_index += 1
+      end
+
+      visible = +''
+      visible_width = 0
+      cursor_x = 0
+
+      chars[start_index..].to_a.each_with_index do |char, offset|
+        char_width = widths[start_index + offset]
+        break if visible_width + char_width > available_width
+
+        visible << char
+        visible_width += char_width
+        cursor_x = visible_width if start_index + offset + 1 <= cursor_index
+      end
+
+      [visible, cursor_x]
     end
   end
 end

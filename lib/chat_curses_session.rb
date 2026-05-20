@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
 require_relative 'chat_backend'
-require_relative 'chat_agent_controls'
-require_relative 'chat_command_completion'
+require_relative 'chat_command_parser'
+require_relative 'chat_command_completer'
 require_relative 'chat_curses_mouse'
 require_relative 'chat_cursor_editing'
-require_relative 'chat_scroll_controls'
+require_relative 'chat_scroll_state'
 require_relative 'chat_tool_tracking'
-require_relative 'chat_session_status'
+require_relative 'chat_status_line_formatter'
 require_relative 'chat_session_info'
 
 Thread.report_on_exception = true
@@ -15,21 +15,28 @@ Thread.report_on_exception = true
 module ChatApp
   class CursesSession
     include ChatBackend::TextLayout
-    include AgentControls
-    include CommandCompletion
     include CursesMouse
     include CursorEditing
-    include ScrollControls
     include ToolTracking
-    include SessionStatus
     include SessionInfo
 
     HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
     MAX_HISTORY = 1000
     attr_reader :status, :transcript, :session_thread, :input_queue, :output_queue, :history_store,
-                :model, :system_prompt, :input_buffer, :input_cursor, :transcript_scroll,
-                :mouse_debug, :agent, :agent_name, :agent_registry
-    attr_accessor :transcript_visible_height
+                :model, :system_prompt, :input_buffer, :input_cursor,
+                :mouse_debug, :agent, :agent_name, :agent_registry, :scroll_state
+
+    def transcript_visible_height
+      @scroll_state.visible_height
+    end
+
+    def transcript_visible_height=(value)
+      @scroll_state.visible_height = value
+    end
+
+    def transcript_scroll
+      @scroll_state.scroll
+    end
 
     def initialize(api_key, agent_registry:, agent_name:, debug_mouse_enabled:, llm: RubyLLM)
       @api_key = api_key
@@ -43,8 +50,10 @@ module ChatApp
       @history_draft = nil
       @input_buffer = +''
       @input_cursor = 0
-      @transcript_scroll = 0
-      @transcript_visible_height = 0
+      @scroll_state = ScrollState.new
+      @command_parser = CommandParser.new(@agent_registry)
+      @command_completer = CommandCompleter.new(@agent_registry.names)
+      @status_line_formatter = StatusLineFormatter.new
       @mouse_debug = nil
       @notice_message = nil
       @running = true
@@ -67,13 +76,17 @@ module ChatApp
       when :down
         recall_history(:down)
       when :page_up
-        scroll_transcript(page_scroll_amount)
+        @scroll_state.scroll_by(@scroll_state.page_scroll_amount)
       when :page_down
-        scroll_transcript(-page_scroll_amount)
+        @scroll_state.scroll_by(-@scroll_state.page_scroll_amount)
       when :mouse
         handle_mouse_event
       when :tab
-        complete_input(agent_names: @agent_registry.names)
+        if (res = @command_completer.complete(@input_buffer, @input_cursor))
+          @input_buffer = res[:buffer]
+          @input_cursor = res[:cursor]
+          @notice_message = res[:notice]
+        end
       when :enter
         submit_input
       when :quit
@@ -117,38 +130,7 @@ module ChatApp
     end
 
     def input_viewport(available_width)
-      available_width = [available_width, 0].max
-      chars = @input_buffer.each_char.to_a
-      widths = chars.map { |char| display_width(char) }
-      cursor_index = @input_cursor.clamp(0, chars.length)
-      cursor_width = widths[0...cursor_index].sum
-      total_width = widths.sum
-
-      return [@input_buffer.dup, cursor_width] if total_width <= available_width
-
-      start_width = [cursor_width - available_width + 1, 0].max
-      start_index = 0
-      consumed = 0
-
-      while start_index < chars.length && consumed + widths[start_index] <= start_width
-        consumed += widths[start_index]
-        start_index += 1
-      end
-
-      visible = +''
-      visible_width = 0
-      cursor_x = 0
-
-      chars[start_index..].to_a.each_with_index do |char, offset|
-        char_width = widths[start_index + offset]
-        break if visible_width + char_width > available_width
-
-        visible << char
-        visible_width += char_width
-        cursor_x = visible_width if start_index + offset + 1 <= cursor_index
-      end
-
-      [visible, cursor_x]
+      super(@input_buffer, @input_cursor, available_width)
     end
 
     private
@@ -196,37 +178,49 @@ module ChatApp
       @input_cursor += key.length
     end
 
+    def response_pending?
+      @status.pending? || @status.streaming?
+    end
+
+    def status_line
+      @status_line_formatter.format(
+        agent_name: @agent_name,
+        model: @model,
+        status: @status,
+        scroll: @scroll_state.scroll,
+        notice_message: @notice_message,
+        debug_mouse_enabled: @debug_mouse_enabled,
+        mouse_debug: @mouse_debug,
+        agent: @agent,
+        tool_classes: respond_to?(:tool_classes, true) ? tool_classes : nil,
+        current_input_text: @input_buffer,
+        tool_hint_features: @tool_hint_features,
+        tool_status_message: respond_to?(:tool_status_message, true) ? tool_status_message : nil
+      )
+    end
+
     def submit_input
-      scroll_to_bottom
+      @scroll_state.scroll_to_bottom
       text = @input_buffer.dup
       return if text.strip.empty?
       return if response_pending?
 
-      if agent_command?(text)
-        select_agent(agent_name_from_command(text))
-        @input_buffer = +''
-        @input_cursor = 0
-        @history_index = -1
-        @history_draft = nil
+      if @command_parser.agent_command?(text)
+        select_agent(@command_parser.agent_name_from_command(text))
+        reset_input!
         return
       end
 
-      if exit_command?(text)
+      if @command_parser.exit_command?(text)
         @running = false
-        @input_buffer = +''
-        @input_cursor = 0
-        @history_index = -1
-        @history_draft = nil
+        reset_input!
         return
       end
 
-      if session_info_command?(text)
+      if @command_parser.session_info_command?(text)
         @transcript.info_message(session_info_text)
         @notice_message = nil
-        @input_buffer = +''
-        @input_cursor = 0
-        @history_index = -1
-        @history_draft = nil
+        reset_input!
         return
       end
 
@@ -238,10 +232,7 @@ module ChatApp
       @input_queue.push(type: :user_message, content: text)
       @notice_message = nil
 
-      @input_buffer = +''
-      @input_cursor = 0
-      @history_index = -1
-      @history_draft = nil
+      reset_input!
     end
 
     def recall_history(direction)
@@ -304,6 +295,13 @@ module ChatApp
       @session_thread.kill if @session_thread.alive?
     rescue StandardError
       nil
+    end
+
+    def reset_input!
+      @input_buffer = +''
+      @input_cursor = 0
+      @history_index = -1
+      @history_draft = nil
     end
   end
 end

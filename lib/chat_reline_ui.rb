@@ -3,10 +3,11 @@
 require 'io/console'
 require 'reline'
 require_relative 'chat_backend'
-require_relative 'chat_agent_controls'
-require_relative 'chat_command_completion'
+require_relative 'chat_command_parser'
+require_relative 'chat_command_completer'
 require_relative 'chat_tool_tracking'
-require_relative 'chat_session_status'
+require_relative 'chat_status_line_formatter'
+require_relative 'chat_tool_hints'
 require_relative 'chat_session_info'
 
 Thread.report_on_exception = true
@@ -14,11 +15,9 @@ Thread.report_on_exception = true
 module ChatApp
   class RelineUI
     include ChatBackend::TextLayout
-    include AgentControls
-    include CommandCompletion
     include ToolTracking
-    include SessionStatus
     include SessionInfo
+    include ToolHints
 
     HISTORY_FILE = File.expand_path('.chat_history', Dir.home)
     MAX_HISTORY = 1000
@@ -27,6 +26,8 @@ module ChatApp
       @api_key = api_key
       @agent_registry = agent_registry
       @agent_name = agent_name.to_s
+      @command_parser = CommandParser.new(@agent_registry)
+      @command_completer = CommandCompleter.new(@agent_registry.names)
       @debug_enabled = env_truthy?(ENV.fetch('CHAT_DEBUG', nil)) || env_truthy?(ENV.fetch('CHAT_RELINE_DEBUG', nil))
       @input_queue = Queue.new
       @output_queue = Queue.new
@@ -55,7 +56,7 @@ module ChatApp
         drain_output_queue
 
         input = read_input(prompt_text)
-        break if input.nil? || exit_command?(input)
+        break if input.nil? || @command_parser.exit_command?(input)
         next if input.strip.empty?
 
         submit_input(input)
@@ -76,13 +77,13 @@ module ChatApp
     def submit_input(content)
       debug_log("submit input: #{content.inspect}")
 
-      if agent_command?(content)
-        agent_name = agent_name_from_command(content)
+      if @command_parser.agent_command?(content)
+        agent_name = @command_parser.agent_name_from_command(content)
         select_agent(agent_name)
         return
       end
 
-      if session_info_command?(content)
+      if @command_parser.session_info_command?(content)
         @transcript.info_message(session_info_text)
         @notice_message = nil
         return
@@ -147,7 +148,7 @@ module ChatApp
     end
 
     def start_session(agent_name)
-      agent = resolve_agent(agent_name)
+      agent = @command_parser.resolve_agent(agent_name)
       @agent = agent
       @model = agent.model
       @system_prompt = agent.system_prompt
@@ -262,10 +263,9 @@ module ChatApp
     end
 
     def reline_completion_candidates
-      command_completion_candidates(
-        buffer: Reline.line_buffer,
-        cursor: Reline.point,
-        agent_names: @agent_registry.names
+      @command_completer.candidates(
+        Reline.line_buffer,
+        Reline.point
       )
     rescue StandardError => e
       debug_exception('reline_completion_candidates', e)

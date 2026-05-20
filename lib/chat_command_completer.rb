@@ -1,26 +1,13 @@
 # frozen_string_literal: true
 
 module ChatApp
-  module CommandCompletion
-    private
-
-    def complete_input(agent_names:)
-      return if response_pending?
-
-      result = command_completion(
-        buffer: @input_buffer,
-        cursor: @input_cursor,
-        agent_names: agent_names
-      )
-      return unless result
-
-      @input_buffer = result[:buffer]
-      @input_cursor = result[:cursor]
-      @notice_message = result[:notice]
+  class CommandCompleter
+    def initialize(agent_names)
+      @agent_names = Array(agent_names).map(&:to_s)
     end
 
-    def command_completion(buffer:, cursor:, agent_names:)
-      context = command_completion_context(buffer, cursor, agent_names)
+    def complete(buffer, cursor)
+      context = command_completion_context(buffer, cursor)
       return nil unless context
 
       candidates = context[:candidates]
@@ -41,20 +28,14 @@ module ChatApp
       completion_result(new_buffer, context[:range].begin + replacement.length, notice: nil)
     end
 
-    def command_completion_candidates(buffer:, cursor:, agent_names:)
-      context = command_completion_context(buffer, cursor, agent_names)
+    def candidates(buffer, cursor)
+      context = command_completion_context(buffer, cursor)
       context ? context[:candidates] : []
     end
 
-    def completion_result(buffer, cursor, notice:)
-      {
-        buffer: buffer,
-        cursor: cursor,
-        notice: notice
-      }
-    end
+    private
 
-    def command_completion_context(buffer, cursor, agent_names)
+    def command_completion_context(buffer, cursor)
       before = buffer.to_s[0...cursor]
       return nil unless before&.start_with?('/')
 
@@ -68,7 +49,7 @@ module ChatApp
         }
       elsif (match = before.match(%r{\A/agent\s+(\S*)\z}))
         fragment = match[1]
-        candidates = Array(agent_names).map(&:to_s).select { |name| name.start_with?(fragment) }.map { |name| "#{name} " }
+        candidates = @agent_names.select { |name| name.start_with?(fragment) }.map { |name| "#{name} " }
         {
           range: (cursor - fragment.length)...cursor,
           fragment: fragment,
@@ -97,6 +78,14 @@ module ChatApp
 
     def ambiguous_notice(candidates)
       "completions: #{candidates.join(', ')}"
+    end
+
+    def completion_result(buffer, cursor, notice:)
+      {
+        buffer: buffer,
+        cursor: cursor,
+        notice: notice
+      }
     end
   end
 end

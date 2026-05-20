@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
 module ChatApp
-  module AgentControls
-    private
+  class CommandParser
+    def initialize(agent_registry)
+      @agent_registry = agent_registry
+    end
 
     def command_name(text)
       text.to_s.split(/\s+/, 2).first.to_s.delete_prefix('/')
