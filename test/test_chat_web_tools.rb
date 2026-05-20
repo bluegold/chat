@@ -220,5 +220,13 @@ class ChatBackendWebToolsTest < Minitest::Test
     refute_includes host.tool_hints_for('正規表現をパースして'), :fetch
     refute_includes host.tool_hints_for('正規表現をパースして'), :web
   end
+
+  def test_tool_hints_triggers_list_feature_for_directory_list_requests
+    host = DummyHost.new
+
+    assert_includes host.tool_hints_for('ディレクトリの中身を一覧して'), :list
+    assert_includes host.tool_hints_for('tree を見せて'), :list
+    assert_includes host.tool_hints_for('フォルダ構成を知りたい'), :list
+  end
   # rubocop:enable Minitest/MultipleAssertions
 end

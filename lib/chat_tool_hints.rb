@@ -13,6 +13,10 @@ module ChatApp
         hints << :filesystem
       end
 
+      if text.match?(/一覧|リスト|中身|配下|構成|ツリー|tree|何がある|何が入っている|directory contents|contents|list dir|list directory/i)
+        hints << :list
+      end
+
       hints << :memory if text.match?(/前に|以前|いつもの|覚えて|忘れて|from now on|remember|forget|前回/i)
       hints << :runtime if text.match?(/計算|集計|変換|CSV|JSON|YAML|正規表現|パース|検証|試して|実行|ベンチ|比較|Ruby|Python|コード/i)
       if text.match?(/検索|調べ|最新|ニュース|現在|天気|Web|ネット|google|tavily|search|latest|news|weather/i)

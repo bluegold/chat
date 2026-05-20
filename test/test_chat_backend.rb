@@ -352,7 +352,9 @@ class ChatBackendSessionConfigTest < Minitest::Test
         api_key: 'test-key',
         agent: agent,
         response_sync: config.response_sync,
-        llm: nil
+        llm: nil,
+        archive_base_dir: nil,
+        summarizer_agent: nil
       },
       config.to_h
     )

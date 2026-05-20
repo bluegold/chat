@@ -101,7 +101,10 @@ module ChatApp
 
       def expand_root(root)
         base = root.to_s.strip.empty? ? Dir.pwd : File.expand_path(root.to_s, Dir.pwd)
-        raise ArgumentError, "root does not exist: #{base}" unless Dir.exist?(base)
+        return base if Dir.exist?(base)
+
+        message = File.exist?(base) ? "root must be a directory: #{base}" : "root does not exist: #{base}"
+        raise ArgumentError, message
 
         base
       end

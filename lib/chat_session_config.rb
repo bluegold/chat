@@ -9,8 +9,19 @@ module ChatBackend
     :api_key,
     :agent,
     :response_sync,
-    :llm
+    :llm,
+    :archive_base_dir,
+    :summarizer_agent
   ) do
+    # rubocop:disable Metrics/ParameterLists
+    def initialize(
+      input_queue:, output_queue:, api_key:, agent:, response_sync:,
+      llm: nil, archive_base_dir: nil, summarizer_agent: nil
+    )
+      super
+    end
+    # rubocop:enable Metrics/ParameterLists
+
     def llm_client
       llm || RubyLLM
     end

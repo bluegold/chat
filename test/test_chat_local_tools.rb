@@ -19,6 +19,11 @@ class ChatBackendLocalToolsTest < Minitest::Test
     assert_equal %w[list_dir read_file search_files search_text], tool_names.sort
   end
 
+  def test_search_tools_describe_query_as_required
+    assert_includes ChatApp::LocalTools::SearchFilesTool.description, 'Use list_dir'
+    assert_includes ChatApp::LocalTools::SearchTextTool.description, 'Query is required'
+  end
+
   def test_search_files_tool_finds_matching_paths
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, 'app/models'))
@@ -36,6 +41,36 @@ class ChatBackendLocalToolsTest < Minitest::Test
     end
   end
 
+  def test_search_files_tool_rejects_dot_query_in_favor_of_list_dir
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, 'README.md'), 'hello')
+
+      output = ChatApp::LocalTools::SearchFilesTool.new.call(
+        query: '.',
+        root: dir,
+        limit: 10
+      )
+
+      assert_includes output, 'Listing .:'
+      assert_includes output, '- README.md'
+    end
+  end
+
+  def test_search_files_tool_falls_back_to_list_dir_for_empty_query
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, 'README.md'), 'hello')
+
+      output = ChatApp::LocalTools::SearchFilesTool.new.call(
+        query: ' ',
+        root: dir,
+        limit: 10
+      )
+
+      assert_includes output, 'Listing .:'
+      assert_includes output, '- README.md'
+    end
+  end
+
   def test_search_text_tool_finds_matching_lines
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, 'app/models'))
@@ -49,6 +84,21 @@ class ChatBackendLocalToolsTest < Minitest::Test
 
       assert_includes output, 'Found 1 matches under'
       assert_includes output, 'app/models/user.rb:2:   # needle'
+    end
+  end
+
+  def test_search_text_tool_searches_within_file_root
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, 'README.md'), 'needle')
+
+      output = ChatApp::LocalTools::SearchTextTool.new.call(
+        query: 'needle',
+        root: File.join(dir, 'README.md'),
+        limit: 10
+      )
+
+      assert_includes output, 'Found 1 matches under'
+      assert_includes output, 'README.md:1: needle'
     end
   end
 

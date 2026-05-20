@@ -53,7 +53,10 @@ module ChatApp
 
       def expand_root(root)
         base = root.to_s.strip.empty? ? Dir.pwd : File.expand_path(root.to_s, Dir.pwd)
-        raise ArgumentError, "root does not exist: #{base}" unless Dir.exist?(base)
+        return base if Dir.exist?(base)
+
+        message = File.exist?(base) ? "root must be a directory: #{base}" : "root does not exist: #{base}"
+        raise ArgumentError, message
 
         base
       end
@@ -93,14 +96,14 @@ module ChatApp
     class SearchFilesTool < BaseTool
       tool_name 'search_files'
       features :baseline, :filesystem, :search
-      description 'Search file and directory names under a root directory.'
-      param :query, desc: 'Substring to match against relative paths.'
+      description 'Search file and directory names under a root directory. Use list_dir to inspect directory contents; this tool is for matching a specific name fragment.'
+      param :query, desc: 'Required specific substring to match against relative paths. Not for listing a directory.'
       param :root, required: false, desc: 'Search root directory.'
       param :limit, type: 'integer', required: false, desc: 'Maximum results.'
 
       def execute(query:, root: '.', limit: MAX_SEARCH_RESULTS)
         query = query.to_s.strip
-        return "No query given." if query.empty?
+        return ChatApp::LocalTools::ListDirTool.new.call(path: '.', root: root, limit: limit) if query.empty? || query == '.'
 
         root = expand_root(root)
         needle = query.downcase
@@ -142,20 +145,19 @@ module ChatApp
     class SearchTextTool < BaseTool
       tool_name 'search_text'
       features :baseline, :filesystem, :search
-      description 'Search text content under a root directory.'
-      param :query, desc: 'Substring to find in file contents.'
-      param :root, required: false, desc: 'Search root directory.'
+      description 'Search text content under a root directory or a single file. Query is required; use a non-empty substring from the file contents.'
+      param :query, desc: 'Required non-empty substring to find in file contents.'
+      param :root, required: false, desc: 'Search root directory or a single file path.'
       param :limit, type: 'integer', required: false, desc: 'Maximum results.'
 
       def execute(query:, root: '.', limit: MAX_SEARCH_RESULTS)
         query = query.to_s
         return "No query given." if query.strip.empty?
 
-        root = expand_root(root)
+        root = expand_search_root(root)
         matches = []
 
-        Find.find(root) do |path|
-          prune_ignored_dirs(path)
+        each_search_path(root) do |path|
           next unless text_file?(path)
 
           File.readlines(path, chomp: true).each_with_index do |line, index|
@@ -176,6 +178,26 @@ module ChatApp
       end
 
       private
+
+      def expand_search_root(root)
+        base = root.to_s.strip.empty? ? Dir.pwd : File.expand_path(root.to_s, Dir.pwd)
+        return base if Dir.exist?(base) || File.file?(base)
+
+        message = File.exist?(base) ? "root must be a directory or file: #{base}" : "root does not exist: #{base}"
+        raise ArgumentError, message
+      end
+
+      def each_search_path(root)
+        if File.file?(root)
+          yield root
+          return
+        end
+
+        Find.find(root) do |path|
+          prune_ignored_dirs(path)
+          yield path
+        end
+      end
 
       def prune_ignored_dirs(path)
         return unless File.directory?(path)
@@ -240,7 +262,7 @@ module ChatApp
     class ListDirTool < BaseTool
       tool_name 'list_dir'
       features :filesystem, :list
-      description 'List entries in a directory.'
+      description 'List entries in a directory. Use this when you want to see what is inside a folder or the current directory.'
       param :path, required: false, desc: 'Directory path relative to the root directory.'
       param :root, required: false, desc: 'Base directory.'
       param :limit, type: 'integer', required: false, desc: 'Maximum entries to return.'

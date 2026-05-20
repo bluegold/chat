@@ -7,10 +7,11 @@ module ChatApp
     attr_reader :agent, :model, :system_prompt, :status, :transcript,
                 :input_queue, :output_queue, :session_thread
 
-    def initialize(api_key:, agent_registry:, llm: RubyLLM)
+    def initialize(api_key:, agent_registry:, llm: RubyLLM, archive_base_dir: nil)
       @api_key = api_key
       @agent_registry = agent_registry
       @llm = llm
+      @archive_base_dir = archive_base_dir || File.expand_path('~/.config/myagent/archive')
       @session_thread = nil
       @agent = nil
       @model = nil
@@ -32,13 +33,17 @@ module ChatApp
       @input_queue = Queue.new
       @output_queue = Queue.new
 
+      summarizer = @agent_registry['title_summarizer']
+
       config = ChatBackend::SessionConfig.new(
         input_queue: @input_queue,
         output_queue: @output_queue,
         api_key: @api_key,
         agent: @agent,
         response_sync: @status,
-        llm: @llm
+        llm: @llm,
+        archive_base_dir: @archive_base_dir,
+        summarizer_agent: summarizer
       )
       @session_thread = ChatBackend::SessionThread.new(config)
     end
