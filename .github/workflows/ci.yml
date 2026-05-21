@@ -22,7 +22,7 @@ jobs:
           bundler-cache: true
 
       - name: Run tests
-        run: ruby test/run.rb
+        run: bundle exec ruby test/run.rb
 
   build:
     runs-on: ubuntu-latest
