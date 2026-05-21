@@ -2,33 +2,19 @@
 
 require 'minitest/autorun'
 
-if defined?(Curses)
-  class << Curses
-    attr_accessor :fake_mouse_event
+stub_curses = lambda do |target|
+  target.define_singleton_method(:fake_mouse_event) { @fake_mouse_event }
+  target.define_singleton_method(:fake_mouse_event=) { |value| @fake_mouse_event = value }
+  target.define_singleton_method(:getmouse) { fake_mouse_event }
+  target.define_singleton_method(:cols) { 80 }
+end
 
-    def getmouse
-      fake_mouse_event
-    end
-
-    def cols
-      80
-    end
-  end
-else
+unless defined?(Curses)
   module Curses
-    class << self
-      attr_accessor :fake_mouse_event
-
-      def getmouse
-        fake_mouse_event
-      end
-
-      def cols
-        80
-      end
-    end
   end
 end
+
+stub_curses.call(Curses)
 
 module Curses
   BUTTON4_PRESSED = 1 unless const_defined?(:BUTTON4_PRESSED)
@@ -38,12 +24,13 @@ module Curses
   BUTTON4_TRIPLE_CLICKED = 1 unless const_defined?(:BUTTON4_TRIPLE_CLICKED)
 end
 
-require_relative '../lib/chat_curses_session'
+require_relative '../lib/ui/chat_curses_session'
 
 class ChatBackendCursesSessionMouseTest < Minitest::Test
   FakeMouseEvent = Struct.new(:x, :y, :z, :bstate)
 
   class FakeBState
+    # rubocop:disable Style/BitwisePredicate
     def initialize(bits)
       @bits = bits
     end
@@ -51,6 +38,7 @@ class ChatBackendCursesSessionMouseTest < Minitest::Test
     def anybits?(mask)
       (@bits & mask) != 0
     end
+    # rubocop:enable Style/BitwisePredicate
 
     def to_s
       @bits.to_s
@@ -62,7 +50,7 @@ class ChatBackendCursesSessionMouseTest < Minitest::Test
       self
     end
 
-    def add_message(role:, content:)
+    def add_message(*)
       nil
     end
   end
