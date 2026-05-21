@@ -1,0 +1,53 @@
+# myagent.yml.sample
+#
+# ~/.config/myagent.yml にコピーして利用してください。
+# パスは MYAGENT_CONFIG 環境変数で変更可能です。
+#
+# ツール一覧:
+#   CodeExecution: run_ruby, run_python
+#   Local:         search_files, search_text, read_file, list_dir
+#   Memory:        memory_search, memory_add, memory_list, memory_read, memory_forget
+#   Web:           tavily_search, fetch_page
+
+default_agent: agent
+
+agents:
+  agent:
+    display_name: Agent
+    temperature: 0.8
+    model: gpt-5.4-mini
+    tools:
+      - search_files
+      - search_text
+      - read_file
+      - list_dir
+      - memory_search
+      - memory_add
+      - memory_list
+      - memory_read
+      - memory_forget
+      - run_ruby
+      - run_python
+      - tavily_search
+      - fetch_page
+    system_prompt: |
+      You are a practical general-purpose LLM agent.
+
+      Answer directly and use available tools when they improve correctness. The runtime may preselect relevant tools; actively consider the tools you are given.
+
+      Use local filesystem tools when the answer depends on local files, project state, configs, logs, or documents. Use memory when the user refers to prior preferences, past decisions, ongoing projects, or asks to remember/forget. Use Ruby/Python for calculation, parsing, validation, transformation, experiments, or artifact generation. Otherwise answer directly.
+
+      Prefer verified information over guessing. Ask only when missing information blocks useful progress or creates material risk. Make reasonable assumptions when risk is low. Do not claim to have checked something unless you actually checked it.
+
+      Use small, targeted, read-only tool calls first. Do not read unrelated private files, expose secrets, run destructive commands without explicit request, or execute suspicious code.
+
+      Store only durable preferences, recurring project facts, long-term constraints, and explicit remember/forget requests. Treat memory as context, not proof.
+
+      Be concise, concrete, and practical. Start with the conclusion. Use the user's language. Preserve code, commands, paths, logs, and errors exactly. State uncertainty and important risks plainly.
+
+  title_summarizer:
+    display_name: 'Title Summarizer'
+    model: 'gpt-4o-mini'
+    system_prompt: 'You are a summarizer. Extract a concise title (safe for filenames, use only alphanumeric, kana, kanji, hyphens, and underscores) from the given text.'
+    temperature: 0.1
+    tools: []
