@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
+require_relative "lib/version"
+
 Gem::Specification.new do |spec|
   spec.name          = "myagent"
-  spec.version       = "0.1.0"
+  spec.version       = Myagent::VERSION
   spec.authors       = ["The Chat TUI contributors"]
   spec.email         = []
 
