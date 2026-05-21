@@ -165,18 +165,28 @@ agents:
 chat.rb                       # メインエントリーポイント
 lib/
   chat_app_launcher.rb        # ランチャーおよび設定管理
-  chat_backend.rb             # バックエンドのエントリとツール解決
-  chat_agent_registry.rb      # エージェントレジストリ（YAML 読み込み）
-  chat_agent_spec.rb          # エージェント定義（Data クラス）
-  chat_session_config.rb      # セッション設定
-  chat_session_thread.rb      # LLM 通信とストリーミング
-  chat_transcript.rb          # 会話ログ管理
-  chat_history_store.rb       # 入力履歴の永続化
-  chat_text_layout.rb         # 文字幅計算と折り返し
-  chat_reline_ui.rb           # CLI インターフェース
-  chat_curses_ui.rb           # TUI インターフェース
-  chat_curses_session.rb      # curses セッション管理
-  chat_tool_*.rb              # 各種ツール実装
+  backend/
+    chat_backend.rb           # バックエンドのエントリとツール解決
+    chat_agent_registry.rb    # エージェントレジストリ（YAML 読み込み）
+    chat_agent_spec.rb        # エージェント定義（Data クラス）
+    chat_session_config.rb    # セッション設定
+    chat_session_thread.rb    # LLM 通信とストリーミング
+    chat_session_controller.rb # セッション制御
+    chat_transcript.rb        # 会話ログ管理
+    chat_history_store.rb     # 入力履歴の永続化
+    chat_text_layout.rb       # 文字幅計算と折り返し
+    chat_status.rb            # 応答状態管理
+  tools/
+    chat_tool_*.rb            # 各種ツール実装
+  ui/
+    chat_reline_ui.rb         # CLI インターフェース
+    chat_curses_ui.rb         # TUI インターフェース
+    chat_curses_session.rb    # curses セッション管理
+    chat_curses_input*.rb     # curses 入力処理
+    chat_command_*.rb         # コマンド解釈/補完
+    chat_history_navigator.rb # 履歴ナビゲーション
+    chat_session_info.rb      # 表示用セッション情報
+    chat_status_line_formatter.rb # ステータス行の整形
 test/
   test_chat_*.rb              # テストスイート
   run.rb                      # テストランナー

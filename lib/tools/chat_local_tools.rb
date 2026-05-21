@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'find'
-require 'pathname'
 require 'ruby_llm'
 require_relative 'chat_tool_features'
 
@@ -57,8 +56,6 @@ module ChatApp
 
         message = File.exist?(base) ? "root must be a directory: #{base}" : "root does not exist: #{base}"
         raise ArgumentError, message
-
-        base
       end
 
       def expand_path(path, root:)
@@ -96,7 +93,9 @@ module ChatApp
     class SearchFilesTool < BaseTool
       tool_name 'search_files'
       features :baseline, :filesystem, :search
-      description 'Search file and directory names under a root directory. Use list_dir to inspect directory contents; this tool is for matching a specific name fragment.'
+      description 'Search file and directory names under a root directory. ' \
+                  'Use list_dir to inspect directory contents; this tool is for ' \
+                  'matching a specific name fragment.'
       param :query, desc: 'Required specific substring to match against relative paths. Not for listing a directory.'
       param :root, required: false, desc: 'Search root directory.'
       param :limit, type: 'integer', required: false, desc: 'Maximum results.'
@@ -145,7 +144,8 @@ module ChatApp
     class SearchTextTool < BaseTool
       tool_name 'search_text'
       features :baseline, :filesystem, :search
-      description 'Search text content under a root directory or a single file. Query is required; use a non-empty substring from the file contents.'
+      description 'Search text content under a root directory or a single file. ' \
+                  'Query is required; use a non-empty substring from the file contents.'
       param :query, desc: 'Required non-empty substring to find in file contents.'
       param :root, required: false, desc: 'Search root directory or a single file path.'
       param :limit, type: 'integer', required: false, desc: 'Maximum results.'

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative 'chat_tool_hints'
+require_relative '../tools/chat_tool_hints'
 
 module ChatApp
   class StatusLineFormatter

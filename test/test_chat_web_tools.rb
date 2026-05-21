@@ -5,7 +5,7 @@ require 'net/http'
 require 'open3'
 require 'json'
 
-require_relative '../lib/chat_backend'
+require_relative '../lib/backend/chat_backend'
 
 # Dynamic stubbing of Net::HTTP to avoid minitest/mock load conflicts
 class << Net::HTTP

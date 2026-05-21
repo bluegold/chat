@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
-require_relative '../lib/chat_backend'
-require_relative '../lib/chat_status_line_formatter'
+require_relative '../lib/backend/chat_backend'
+require_relative '../lib/ui/chat_status_line_formatter'
 
 class ChatBackendStatusLineTest < Minitest::Test
   def test_status_line_includes_tool_count

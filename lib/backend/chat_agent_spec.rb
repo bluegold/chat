@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative 'chat_tool_hints'
+require_relative '../tools/chat_tool_hints'
 
 module ChatBackend
   AgentSpec = Data.define(:name, :display_name, :model, :system_prompt, :temperature, :tools) do

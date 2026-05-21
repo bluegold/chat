@@ -2,9 +2,9 @@
 
 require 'minitest/autorun'
 
-require_relative '../lib/chat_backend'
-require_relative '../lib/chat_curses_input'
-require_relative '../lib/chat_curses_input_render'
+require_relative '../lib/backend/chat_backend'
+require_relative '../lib/ui/chat_curses_input'
+require_relative '../lib/ui/chat_curses_input_render'
 
 class ChatBackendCursesInputRenderTest < Minitest::Test
   def test_input_render_state_shows_prompt_on_empty_buffer

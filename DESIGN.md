@@ -17,9 +17,14 @@
 chat.rb
 lib/
   chat_app_launcher.rb
-  chat_backend.rb
-  chat_reline_ui.rb
-  chat_curses_ui.rb
+  backend/
+    chat_backend.rb
+    chat_session_controller.rb
+  ui/
+    chat_reline_ui.rb
+    chat_curses_ui.rb
+  tools/
+    chat_tool_*.rb
 test/
   test_chat_backend.rb
   test_chat_launcher.rb

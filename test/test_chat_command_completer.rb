@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
-require_relative '../lib/chat_command_completer'
+require_relative '../lib/ui/chat_command_completer'
 
 class ChatBackendCommandCompletionTest < Minitest::Test
   def setup

@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
-require_relative '../lib/chat_scroll_state'
+require_relative '../lib/ui/chat_scroll_state'
 
 class ChatBackendScrollStateTest < Minitest::Test
   def setup

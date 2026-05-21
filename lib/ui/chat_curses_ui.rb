@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 require 'curses'
-require_relative 'chat_backend'
+require_relative '../backend/chat_backend'
 require_relative 'chat_curses_input_render'
 require_relative 'chat_curses_input'
 require_relative 'chat_curses_session'

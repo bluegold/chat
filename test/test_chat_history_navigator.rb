@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
-require_relative '../lib/chat_history_navigator'
+require_relative '../lib/ui/chat_history_navigator'
 
 class ChatHistoryNavigatorTest < Minitest::Test
   class FakeHistoryStore

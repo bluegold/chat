@@ -3,14 +3,14 @@
 require 'io/console'
 require 'reline'
 require 'forwardable'
-require_relative 'chat_backend'
+require_relative '../backend/chat_backend'
 require_relative 'chat_command_parser'
 require_relative 'chat_command_completer'
-require_relative 'chat_tool_tracking'
+require_relative '../tools/chat_tool_tracking'
 require_relative 'chat_status_line_formatter'
-require_relative 'chat_tool_hints'
+require_relative '../tools/chat_tool_hints'
 require_relative 'chat_session_info'
-require_relative 'chat_session_controller'
+require_relative '../backend/chat_session_controller'
 
 Thread.report_on_exception = true
 
@@ -196,7 +196,7 @@ module ChatApp
     def print_completed_output(msg)
       case msg[:type]
       when :stream_end
-        assistant = transcript.messages.reverse.find { |message| message[:role] == :assistant && !message[:content].to_s.empty? }
+        assistant = transcript.messages.rfind { |message| message[:role] == :assistant && !message[:content].to_s.empty? }
         return unless assistant
 
         puts

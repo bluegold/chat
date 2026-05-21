@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative 'chat_reline_ui'
+require_relative 'ui/chat_reline_ui'
 
 module ChatAppLauncher
   module_function
@@ -16,7 +16,7 @@ module ChatAppLauncher
     when 'reline'
       ChatApp::RelineUI.new(api_key, agent_registry: agent_registry, agent_name: agent_name).run
     when 'curses'
-      require_relative 'chat_curses_ui'
+      require_relative 'ui/chat_curses_ui'
       ChatApp::CursesUI.new(api_key, agent_registry: agent_registry, agent_name: agent_name).run
     else
       abort "Error: unknown UI #{ui.inspect} (use reline or curses)"

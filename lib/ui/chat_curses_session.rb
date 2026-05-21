@@ -1,17 +1,17 @@
 # frozen_string_literal: true
 
 require 'forwardable'
-require_relative 'chat_backend'
+require_relative '../backend/chat_backend'
 require_relative 'chat_command_parser'
 require_relative 'chat_command_completer'
 require_relative 'chat_curses_mouse'
 require_relative 'chat_cursor_editing'
 require_relative 'chat_scroll_state'
-require_relative 'chat_tool_tracking'
-require_relative 'chat_tool_hints'
+require_relative '../tools/chat_tool_tracking'
+require_relative '../tools/chat_tool_hints'
 require_relative 'chat_status_line_formatter'
 require_relative 'chat_session_info'
-require_relative 'chat_session_controller'
+require_relative '../backend/chat_session_controller'
 require_relative 'chat_history_navigator'
 
 Thread.report_on_exception = true

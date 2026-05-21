@@ -2,11 +2,11 @@
 
 require 'yaml'
 require 'ruby_llm'
-require_relative 'chat_local_tools'
-require_relative 'chat_memory_tools'
-require_relative 'chat_code_execution_tools'
-require_relative 'chat_web_tools'
-require_relative 'chat_tool_hints'
+require_relative '../tools/chat_local_tools'
+require_relative '../tools/chat_memory_tools'
+require_relative '../tools/chat_code_execution_tools'
+require_relative '../tools/chat_web_tools'
+require_relative '../tools/chat_tool_hints'
 
 module ChatBackend
   # rubocop:disable Metrics/PerceivedComplexity

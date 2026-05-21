@@ -4,8 +4,8 @@ require 'fileutils'
 require 'minitest/autorun'
 require 'tmpdir'
 
-require_relative '../lib/chat_backend'
-require_relative '../lib/chat_memory_tools'
+require_relative '../lib/backend/chat_backend'
+require_relative '../lib/tools/chat_memory_tools'
 
 class ChatBackendMemoryToolsTest < Minitest::Test
   def test_memory_tools_expose_multiple_features

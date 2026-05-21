@@ -105,8 +105,6 @@ module ChatApp
 
         message = File.exist?(base) ? "root must be a directory: #{base}" : "root does not exist: #{base}"
         raise ArgumentError, message
-
-        base
       end
 
       def interpreter_for(language)

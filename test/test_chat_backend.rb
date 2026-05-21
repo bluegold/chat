@@ -4,9 +4,9 @@ require 'minitest/autorun'
 require 'tmpdir'
 require 'yaml'
 
-require_relative '../lib/chat_backend'
-require_relative '../lib/chat_tool_tracking'
-require_relative '../lib/chat_session_info'
+require_relative '../lib/backend/chat_backend'
+require_relative '../lib/tools/chat_tool_tracking'
+require_relative '../lib/ui/chat_session_info'
 
 class ChatBackendHistoryStoreTest < Minitest::Test
   def test_history_store_persists_multiline_entries_and_trims_old_values

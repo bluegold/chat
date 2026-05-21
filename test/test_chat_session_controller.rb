@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
-require_relative '../lib/chat_session_controller'
+require_relative '../lib/backend/chat_session_controller'
 
 class ChatSessionControllerTest < Minitest::Test
   class FakeChat
@@ -216,9 +216,11 @@ class ChatSessionControllerTest < Minitest::Test
 
       # File name derived from first user message line, stripped of unsafe chars
       files = Dir.glob(File.join(expected_dir, "*.jsonl"))
+
       assert_equal 1, files.length, "One archive file should exist"
       expected_path = files.first
       expected_cwd = File.basename(Dir.pwd)
+
       assert_match(/#{expected_cwd}-Hello_from_user-\d{6}\.jsonl\z/, expected_path)
 
       # Parse JSONL lines

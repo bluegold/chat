@@ -4,8 +4,8 @@ require 'minitest/autorun'
 require 'tmpdir'
 require 'yaml'
 
-require_relative '../lib/chat_backend'
-require_relative '../lib/chat_code_execution_tools'
+require_relative '../lib/backend/chat_backend'
+require_relative '../lib/tools/chat_code_execution_tools'
 
 class ChatBackendCodeExecutionToolsTest < Minitest::Test
   def test_code_execution_tools_expose_multiple_features

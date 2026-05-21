@@ -4,7 +4,7 @@ require 'fileutils'
 require 'minitest/autorun'
 require 'tmpdir'
 
-require_relative '../lib/chat_backend'
+require_relative '../lib/backend/chat_backend'
 
 class ChatBackendLocalToolsTest < Minitest::Test
   def test_search_tools_expose_multiple_features
