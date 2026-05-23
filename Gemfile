@@ -6,3 +6,5 @@ gem 'ruby_llm'
 gem 'reline'
 gem 'curses'
 gem 'minitest'
+
+gem "irb", "~> 1.18"
