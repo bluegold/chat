@@ -21,7 +21,9 @@ class ChatBackendLocalToolsTest < Minitest::Test
 
   def test_search_tools_describe_query_as_required
     assert_includes ChatApp::LocalTools::SearchFilesTool.description, 'Use list_dir'
-    assert_includes ChatApp::LocalTools::SearchTextTool.description, 'Query is required'
+    assert_includes ChatApp::LocalTools::SearchTextTool.description, 'Use this when you already know a non-empty substring'
+    assert_includes ChatApp::LocalTools::SearchTextTool.description, 'read_file instead'
+    assert_includes ChatApp::LocalTools::ReadFileTool.description, 'known file by path'
   end
 
   def test_search_files_tool_finds_matching_paths
@@ -117,6 +119,26 @@ class ChatBackendLocalToolsTest < Minitest::Test
       assert_includes output, 'notes.txt (2-3/3)'
       assert_includes output, '    2 | two'
       assert_includes output, '    3 | three'
+    end
+  end
+
+  def test_read_file_tool_reports_continuation_when_truncated
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'notes.txt')
+      File.write(path, "one\ntwo\nthree\nfour\n")
+
+      output = ChatApp::LocalTools::ReadFileTool.new.call(
+        path: 'notes.txt',
+        root: dir,
+        start_line: 1,
+        end_line: 4,
+        limit_lines: 2
+      )
+
+      assert_includes output, 'notes.txt (1-2/4)'
+      assert_includes output, '    1 | one'
+      assert_includes output, '    2 | two'
+      assert_includes output, 'Truncated. Continue with start_line: 3'
     end
   end
 

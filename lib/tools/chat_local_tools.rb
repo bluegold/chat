@@ -7,7 +7,7 @@ require_relative 'chat_tool_features'
 module ChatApp
   module LocalTools
     IGNORED_DIRS = %w[.git .hg .svn node_modules vendor tmp log coverage].freeze
-    MAX_FILE_LINES = 200
+    MAX_FILE_LINES = 500
     MAX_SEARCH_RESULTS = 20
 
     def self.register(klass)
@@ -145,9 +145,10 @@ module ChatApp
       tool_name 'search_text'
       features :baseline, :filesystem, :search
       description 'Search text content under a root directory or a single file. ' \
-                  'Query is required; use a non-empty substring from the file contents.'
-      param :query, desc: 'Required non-empty substring to find in file contents.'
-      param :root, required: false, desc: 'Search root directory or a single file path.'
+                  'Use this when you already know a non-empty substring to search for. ' \
+                  'For opening a known file or reading it top-to-bottom, use read_file instead.'
+      param :query, desc: 'Required non-empty substring to find in file contents. Do not use this as a file reader.'
+      param :root, required: false, desc: 'Search root directory or a single file path. Prefer read_file for a known file path.'
       param :limit, type: 'integer', required: false, desc: 'Maximum results.'
 
       def execute(query:, root: '.', limit: MAX_SEARCH_RESULTS)
@@ -218,7 +219,8 @@ module ChatApp
     class ReadFileTool < BaseTool
       tool_name 'read_file'
       features :filesystem, :read
-      description 'Read a file, optionally within a line range.'
+      description 'Read a known file by path, optionally within a line range. ' \
+                  'Use this for opening a file and reading its contents directly.'
       param :path, desc: 'Path to read relative to the root directory.'
       param :root, required: false, desc: 'Base directory.'
       param :start_line, type: 'integer', required: false, desc: 'First line to read.'
@@ -230,7 +232,7 @@ module ChatApp
         return "File not found: #{relative_path(absolute, expand_root(root))}" unless File.file?(absolute)
 
         root_path = expand_root(root)
-        selected, from, to, total_lines = select_file_lines(
+        selected, from, to, total_lines, truncated, next_start_line = select_file_lines(
           absolute,
           start_line:,
           end_line:,
@@ -238,6 +240,9 @@ module ChatApp
         )
         header = "#{relative_path(absolute, root_path)} (#{from}-#{[from + selected.length - 1, to].min}/#{total_lines})"
         body = format_lines(selected, start_line: from)
+        if truncated
+          body = [body, "Truncated. Continue with start_line: #{next_start_line}"].reject(&:empty?).join("\n")
+        end
         [header, body].reject(&:empty?).join("\n")
       rescue StandardError => e
         "Error reading file: #{e.class}: #{e.message}"
@@ -253,9 +258,14 @@ module ChatApp
         to = [to, lines.length].min
 
         selected = lines[(from - 1)...to] || []
-        selected = selected.first(limit_lines.to_i) if limit_lines.to_i.positive?
+        truncated = false
+        if limit_lines.to_i.positive? && selected.length > limit_lines.to_i
+          selected = selected.first(limit_lines.to_i)
+          truncated = true
+        end
+        next_start_line = from + selected.length
 
-        [selected, from, to, lines.length]
+        [selected, from, to, lines.length, truncated, next_start_line]
       end
     end
 

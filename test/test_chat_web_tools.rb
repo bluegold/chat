@@ -216,9 +216,13 @@ class ChatBackendWebToolsTest < Minitest::Test
     assert_includes host.tool_hints_for('http://example.com をfetchして'), :fetch
     assert_includes host.tool_hints_for('URLを読み込む'), :fetch
     assert_includes host.tool_hints_for('URLを読み込む'), :web
+    assert_includes host.tool_hints_for('example.com/docs を見て'), :fetch
+    assert_includes host.tool_hints_for('example.com/docs を見て'), :web
 
     refute_includes host.tool_hints_for('正規表現をパースして'), :fetch
     refute_includes host.tool_hints_for('正規表現をパースして'), :web
+    refute_includes host.tool_hints_for('AGENTS.md を読んで評価して'), :fetch
+    refute_includes host.tool_hints_for('AGENTS.md を読んで評価して'), :web
   end
 
   def test_tool_hints_triggers_list_feature_for_directory_list_requests
@@ -227,6 +231,13 @@ class ChatBackendWebToolsTest < Minitest::Test
     assert_includes host.tool_hints_for('ディレクトリの中身を一覧して'), :list
     assert_includes host.tool_hints_for('tree を見せて'), :list
     assert_includes host.tool_hints_for('フォルダ構成を知りたい'), :list
+  end
+
+  def test_tool_hints_triggers_filesystem_for_named_file_review_requests
+    host = DummyHost.new
+
+    assert_includes host.tool_hints_for('AGENTS.md を読んで評価して'), :filesystem
+    assert_includes host.tool_hints_for('lib/tools/chat_local_tools.rb を読んで確認して'), :filesystem
   end
   # rubocop:enable Minitest/MultipleAssertions
 end

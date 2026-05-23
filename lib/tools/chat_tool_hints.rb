@@ -9,7 +9,8 @@ module ChatApp
 
       hints = []
 
-      if text.match?(/ファイル|ディレクトリ|ログ|設定|config|repo|リポジトリ|コード|エラー|stack trace|traceback|Gemfile|package\.json|Dockerfile/i)
+      if text.match?(/ファイル|ディレクトリ|ログ|設定|config|repo|リポジトリ|コード|エラー|stack trace|traceback|Gemfile|package\.json|Dockerfile/i) ||
+         (mentions_file_reference?(text) && text.match?(/読んで|読む|開いて|見て|確認|評価|解析|レビュー|inspect|open|read|show/i))
         hints << :filesystem
       end
 
@@ -22,12 +23,25 @@ module ChatApp
         hints << :web
       end
 
-      if text.match?(%r{fetch|取得|読み込み|ページ|url|http://|https://}i)
+      if text.match?(%r{fetch|取得|読み込み|ページ|url|http://|https://}i) || contains_url_like_text?(text)
         hints << :fetch
         hints << :web
       end
 
       hints.uniq
+    end
+
+    private
+
+    def contains_url_like_text?(text)
+      text.match?(%r{\bhttps?://[^\s<>()\[\]{}"']+}i) ||
+        text.match?(%r{\bwww\.[^\s<>()\[\]{}"']+}i) ||
+        text.match?(%r{\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[:/?#][^\s<>()\[\]{}"']*)}i)
+    end
+
+    def mentions_file_reference?(text)
+      text.match?(/(?:^|[\s"'])[\w.-]+\.[A-Za-z0-9]{1,8}(?:$|[\s"'])/) ||
+        text.match?(%r{(?:^|[\s"'])[\w./-]+(?:/[\w./-]+)+(?:$|[\s"'])})
     end
   end
 end

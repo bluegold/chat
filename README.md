@@ -233,8 +233,8 @@ ruby test/test_chat_backend.rb
 | カテゴリ | ツール名 | 説明 | features |
 |----------|----------|------|----------|
 | **ローカル** | `search_files` | ファイル・ディレクトリ名を検索 | baseline, filesystem, search |
-| | `search_text` | ファイル内容を全文検索 | baseline, filesystem, search |
-| | `read_file` | ファイルを読み込み（行範囲指定可） | filesystem, read |
+| | `search_text` | ファイル内容を全文検索（既知ファイルの閲覧には使わない） | baseline, filesystem, search |
+| | `read_file` | 既知ファイルを読み込み（行範囲指定可、長い場合は続きの開始行を案内） | filesystem, read |
 | | `list_dir` | ディレクトリの内容を一覧表示 | filesystem, list |
 | **メモリ** | `memory_search` | メモリを検索 | baseline, memory, search |
 | | `memory_add` | メモリを追加 | memory, write |
