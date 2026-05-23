@@ -96,6 +96,35 @@ module ChatApp
         return
       end
 
+      if @command_parser.agent_info_command?(content)
+        transcript.info_message(agent_info_text)
+        @notice_message = nil
+        return
+      end
+
+      if @command_parser.instructions_command?(content)
+        transcript.info_message(instructions_info_text)
+        @notice_message = nil
+        return
+      end
+
+      if @command_parser.api_dump_command?(content)
+        case @command_parser.api_dump_action(content)
+        when :on
+          @session_controller.enable_api_dump!
+          transcript.info_message('api dump enabled')
+          @notice_message = nil
+        when :off
+          @session_controller.disable_api_dump!
+          transcript.info_message('api dump disabled')
+          @notice_message = nil
+        else
+          transcript.info_message(api_dump_state_text)
+          @notice_message = nil
+        end
+        return
+      end
+
       @history_store.add(content)
       Reline::HISTORY.push(content)
       transcript.user_message(content)

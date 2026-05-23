@@ -47,7 +47,7 @@ class ChatAppLauncherTest < Minitest::Test
         YAML
       )
 
-      registry = ChatAppLauncher.resolve_agent_registry('MYAGENT_CONFIG' => path)
+      registry = ChatAppLauncher.resolve_agent_registry({ 'MYAGENT_CONFIG' => path }, cwd: dir)
 
       assert_equal 'coder', registry.default_agent_name
       assert_equal %w[coder helper], registry.names
@@ -75,7 +75,7 @@ class ChatAppLauncherTest < Minitest::Test
         YAML
       )
 
-      registry = ChatAppLauncher.resolve_agent_registry('MYAGENT_CONFIG' => path)
+      registry = ChatAppLauncher.resolve_agent_registry({ 'MYAGENT_CONFIG' => path }, cwd: dir)
 
       assert_equal 'ChatGPT', registry['coder'].label
       assert_in_delta 0.8, registry['coder'].temperature, 0.0001

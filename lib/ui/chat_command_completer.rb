@@ -12,6 +12,7 @@ module ChatApp
 
       candidates = context[:candidates]
       return completion_result(buffer, cursor, notice: nil) if candidates.empty?
+      return completion_result(buffer, cursor, notice: ambiguous_notice(candidates)) if context[:fragment].empty? && candidates.length > 1
 
       replacement = if candidates.length == 1
                       candidates.first
@@ -59,8 +60,15 @@ module ChatApp
     end
 
     def command_replacements(prefix)
+      if prefix.to_s.empty?
+        return %w[/agent /agent_info /api_dump /instructions /session_info /exit]
+      end
+
       commands = []
       commands << '/agent ' if 'agent'.start_with?(prefix.to_s)
+      commands << '/agent_info' if 'agent_info'.start_with?(prefix.to_s) && prefix.to_s.start_with?('agent_')
+      commands << '/api_dump' if 'api_dump'.start_with?(prefix.to_s) && prefix.to_s.start_with?('api')
+      commands << '/instructions' if 'instructions'.start_with?(prefix.to_s)
       commands << '/session_info' if 'session_info'.start_with?(prefix.to_s)
       commands << '/exit' if 'exit'.start_with?(prefix.to_s)
       commands

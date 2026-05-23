@@ -96,6 +96,9 @@ agents:
 
 モデルは各エージェントの `model` フィールドで自由に指定できます。未設定の場合のデフォルトは `gpt-4o-mini` です。
 
+起動時には、`~/.config/myagent/AGENTS.md` と現在の作業ディレクトリから親ディレクトリまでの `AGENTS.md` が見つかれば、`system_prompt` の後ろに順番に追加されます。後ろのブロックほど優先されます。
+`/agent_info` で現在のエージェント情報、`/instructions` で system prompt と読み込まれた `AGENTS.md` のソースを確認できます。`/` 単体でも Tab でコマンド候補を表示できます。
+
 ### キーボードショートカット (Curses TUI)
 
 - `Ctrl+N` / `Ctrl+P`: 次の/前の履歴エントリ

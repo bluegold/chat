@@ -42,6 +42,27 @@ class ChatBackendCommandParserTest < Minitest::Test
     refute @parser.session_info_command?('/exit')
   end
 
+  def test_agent_info_command_predicate
+    assert @parser.agent_info_command?('/agent_info')
+    refute @parser.agent_info_command?('/agent coder')
+  end
+
+  def test_api_dump_command_predicate
+    assert @parser.api_dump_command?('/api_dump')
+    refute @parser.api_dump_command?('/agent_info')
+  end
+
+  def test_api_dump_action_parser
+    assert_equal :on, @parser.api_dump_action('/api_dump on')
+    assert_equal :off, @parser.api_dump_action('/api_dump off')
+    assert_nil @parser.api_dump_action('/api_dump')
+  end
+
+  def test_instructions_command_predicate
+    assert @parser.instructions_command?('/instructions')
+    refute @parser.instructions_command?('/session_info')
+  end
+
   def test_agent_name_from_command
     assert_equal 'coder', @parser.agent_name_from_command('/agent coder')
     assert_equal 'helper', @parser.agent_name_from_command('/agent   helper  ')

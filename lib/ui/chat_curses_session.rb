@@ -200,6 +200,38 @@ module ChatApp
         return
       end
 
+      if @command_parser.agent_info_command?(text)
+        transcript.info_message(agent_info_text)
+        @notice_message = nil
+        reset_input!
+        return
+      end
+
+      if @command_parser.instructions_command?(text)
+        transcript.info_message(instructions_info_text)
+        @notice_message = nil
+        reset_input!
+        return
+      end
+
+      if @command_parser.api_dump_command?(text)
+        case @command_parser.api_dump_action(text)
+        when :on
+          @session_controller.enable_api_dump!
+          transcript.info_message('api dump enabled')
+          @notice_message = nil
+        when :off
+          @session_controller.disable_api_dump!
+          transcript.info_message('api dump disabled')
+          @notice_message = nil
+        else
+          transcript.info_message(api_dump_state_text)
+          @notice_message = nil
+        end
+        reset_input!
+        return
+      end
+
       transcript.user_message(text)
       @tool_hint_features = tool_hints_for(text)
       @history_store.add(text)

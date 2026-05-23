@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
+require 'fileutils'
 require_relative 'chat_backend'
 
 module ChatApp
   class SessionController
     attr_reader :agent, :model, :system_prompt, :status, :transcript,
-                :input_queue, :output_queue, :session_thread
+                :input_queue, :output_queue, :session_thread, :api_dump_path,
+                :instruction_source_paths
 
     def initialize(api_key:, agent_registry:, llm: RubyLLM, archive_base_dir: nil)
       @api_key = api_key
@@ -20,6 +22,9 @@ module ChatApp
       @transcript = nil
       @input_queue = nil
       @output_queue = nil
+      @api_dump_path = nil
+      @api_dump_enabled = false
+      @instruction_source_paths = []
     end
 
     def start_session(agent_name)
@@ -34,6 +39,9 @@ module ChatApp
       @transcript = ChatBackend::Transcript.new
       @input_queue = Queue.new
       @output_queue = Queue.new
+      @api_dump_path = build_api_dump_path
+      @api_dump_enabled = false
+      @instruction_source_paths = @agent_registry.instruction_source_paths(cwd: Dir.pwd)
 
       summarizer = @agent_registry['title_summarizer']
 
@@ -45,7 +53,10 @@ module ChatApp
         response_sync: @status,
         llm: @llm,
         archive_base_dir: @archive_base_dir,
-        summarizer_agent: summarizer
+        summarizer_agent: summarizer,
+        instruction_source_paths: @instruction_source_paths,
+        api_dump_path: @api_dump_path,
+        api_dump_enabled_proc: -> { @api_dump_enabled }
       )
       @session_thread = ChatBackend::SessionThread.new(config)
     end
@@ -92,5 +103,32 @@ module ChatApp
       @status.expect_response
       @input_queue.push(type: :user_message, content: text)
     end
+
+    def enable_api_dump!
+      FileUtils.mkdir_p(File.dirname(@api_dump_path))
+      ChatBackend::ApiDumpRecorder.write_start_marker(
+        @api_dump_path,
+        agent: @agent&.name,
+        model: @model
+      )
+      @api_dump_enabled = true
+    end
+
+    def disable_api_dump!
+      @api_dump_enabled = false
+    end
+
+    def api_dump_enabled?
+      @api_dump_enabled
+    end
+
+    def session_title
+      @session_thread&.session_title
+    end
+
+    def build_api_dump_path
+      File.expand_path('~/.config/myagent/api_dump.log')
+    end
+    private :build_api_dump_path
   end
 end

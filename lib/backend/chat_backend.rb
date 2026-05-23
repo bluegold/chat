@@ -7,6 +7,7 @@ require_relative '../tools/chat_memory_tools'
 require_relative '../tools/chat_code_execution_tools'
 require_relative '../tools/chat_web_tools'
 require_relative '../tools/chat_tool_hints'
+require_relative 'chat_api_dump_recorder'
 
 module ChatBackend
   # rubocop:disable Metrics/PerceivedComplexity

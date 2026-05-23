@@ -4,7 +4,7 @@ require 'ruby_llm'
 
 module ChatBackend
   class SessionThread
-    attr_reader :thread
+    attr_reader :thread, :session_title
 
     def initialize(config)
       @input_queue = config.input_queue
@@ -17,7 +17,11 @@ module ChatBackend
       @llm = config.llm_client
       @archive_base_dir = config.archive_base_dir
       @summarizer_agent = config.summarizer_agent
+      @instruction_source_paths = Array(config.instruction_source_paths)
+      @api_dump_path = config.api_dump_path
+      @api_dump_enabled_proc = config.api_dump_enabled_proc
       @archive_path = nil
+      @session_title = nil
 
       @llm.configure do |llm_config|
         llm_config.openai_api_key = config.api_key
@@ -43,6 +47,10 @@ module ChatBackend
     private
 
     def run
+      run_loop
+    end
+
+    def run_loop
       loop do
         msg = @input_queue.pop
         break if msg[:type] == :shutdown
@@ -59,6 +67,21 @@ module ChatBackend
     end
 
     def handle_user_message(content)
+      if api_dump_enabled?
+        ChatBackend::ApiDumpRecorder.activate(@api_dump_path) do
+          handle_user_message_without_dumping(content)
+        end
+      else
+        handle_user_message_without_dumping(content)
+      end
+    rescue StandardError => e
+      record_api_dump_error(e)
+      @output_queue.push(type: :error, message: format_error(e))
+      @output_queue.push(type: :stream_end)
+      @response_sync&.end_response
+    end
+
+    def handle_user_message_without_dumping(content)
       chat = build_chat(content)
       @history << { role: :user, content: content }
 
@@ -73,10 +96,6 @@ module ChatBackend
       @history << { role: :assistant, content: assistant_text } unless assistant_text.empty?
       write_log_event(role: :assistant, content: assistant_text) unless assistant_text.empty?
 
-      @output_queue.push(type: :stream_end)
-      @response_sync&.end_response
-    rescue StandardError => e
-      @output_queue.push(type: :error, message: format_error(e))
       @output_queue.push(type: :stream_end)
       @response_sync&.end_response
     end
@@ -108,6 +127,10 @@ module ChatBackend
     def build_chat(content)
       chat = @llm.chat
       chat.with_instructions(@system_prompt) if @system_prompt && !@system_prompt.strip.empty?
+      instruction_source_messages.each do |message|
+        chat.add_message(role: :system, content: message)
+      end
+      install_response_summary_callback(chat)
       apply_tools(chat, content)
       install_tool_callbacks(chat)
 
@@ -116,6 +139,43 @@ module ChatBackend
       end
 
       chat
+    end
+
+    def api_dump_enabled?
+      @api_dump_enabled_proc&.call
+    end
+
+    def install_response_summary_callback(chat)
+      return chat unless chat.respond_to?(:after_message)
+
+      chat.after_message do |message|
+        next unless api_dump_enabled?
+        next unless message.respond_to?(:role) && message.role == :assistant
+
+        ChatBackend::ApiDumpRecorder.record_response_summary(
+          sequence: ChatBackend::ApiDumpRecorder.current_sequence,
+          response: message,
+          assistant_text: message.respond_to?(:content) ? message.content : nil
+        )
+      end
+
+      chat
+    end
+
+    def instruction_source_messages
+      @instruction_source_paths.filter_map do |path|
+        next unless File.file?(path)
+
+        content = File.read(path)
+        next if content.strip.empty?
+
+        <<~TEXT.rstrip
+          [AGENTS.md: #{path}]
+          #{content.rstrip}
+        TEXT
+      rescue StandardError
+        nil
+      end
     end
 
     def apply_tools(chat, content)
@@ -133,6 +193,16 @@ module ChatBackend
       end
 
       chat
+    end
+
+    def record_api_dump_error(error)
+      return unless api_dump_enabled?
+      return if ChatBackend::ApiDumpRecorder.current_sequence.nil?
+
+      ChatBackend::ApiDumpRecorder.record_response_summary(
+        sequence: ChatBackend::ApiDumpRecorder.current_sequence,
+        error: error
+      )
     end
 
     def install_tool_callbacks(chat)
@@ -227,6 +297,7 @@ module ChatBackend
       return if raw_text.nil? || raw_text.empty?
 
       safe_subject = generate_title(first_user_message.to_s)
+      @session_title = safe_subject
 
       now = Time.now
       dir = File.join(@archive_base_dir, now.strftime('%Y/%m/%d'))

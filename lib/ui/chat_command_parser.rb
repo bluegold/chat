@@ -18,6 +18,32 @@ module ChatApp
       command_name(text) == 'session_info'
     end
 
+    def agent_info_command?(text)
+      command_name(text) == 'agent_info'
+    end
+
+    def api_dump_command?(text)
+      command_name(text) == 'api_dump'
+    end
+
+    def api_dump_action(text)
+      return nil unless api_dump_command?(text)
+
+      _cmd, action = text.to_s.split(/\s+/, 2)
+      case action.to_s.strip
+      when 'on'
+        :on
+      when 'off'
+        :off
+      else
+        nil
+      end
+    end
+
+    def instructions_command?(text)
+      command_name(text) == 'instructions'
+    end
+
     def exit_command?(text)
       command_name(text) == 'exit'
     end

@@ -11,12 +11,15 @@ module ChatBackend
     :response_sync,
     :llm,
     :archive_base_dir,
-    :summarizer_agent
+    :summarizer_agent,
+    :instruction_source_paths,
+    :api_dump_path,
+    :api_dump_enabled_proc
   ) do
     # rubocop:disable Metrics/ParameterLists
     def initialize(
       input_queue:, output_queue:, api_key:, agent:, response_sync:,
-      llm: nil, archive_base_dir: nil, summarizer_agent: nil
+      llm: nil, archive_base_dir: nil, summarizer_agent: nil, instruction_source_paths: nil, api_dump_path: nil, api_dump_enabled_proc: nil
     )
       super
     end

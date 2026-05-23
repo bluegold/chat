@@ -112,6 +112,51 @@ class ChatSessionControllerTest < Minitest::Test
     controller.shutdown_session
   end
 
+  def test_api_dump_can_be_enabled_and_disabled
+    Dir.mktmpdir do |dir|
+      controller = ChatApp::SessionController.new(
+        api_key: 'fake_key',
+        agent_registry: @registry,
+        llm: FakeLLM
+      )
+      controller.start_session('coder')
+      controller.instance_variable_set(:@api_dump_path, File.join(dir, 'api_dump.log'))
+
+      refute_predicate controller, :api_dump_enabled?
+      controller.enable_api_dump!
+      assert_predicate controller, :api_dump_enabled?
+      controller.disable_api_dump!
+      refute_predicate controller, :api_dump_enabled?
+
+      controller.shutdown_session
+    end
+  end
+
+  def test_enable_api_dump_creates_log_file
+    Dir.mktmpdir do |dir|
+      controller = ChatApp::SessionController.new(
+        api_key: 'fake_key',
+        agent_registry: @registry,
+        llm: FakeLLM
+      )
+      controller.start_session('coder')
+      controller.instance_variable_set(:@api_dump_path, File.join(dir, 'api_dump.log'))
+
+      refute File.exist?(controller.api_dump_path)
+
+      controller.enable_api_dump!
+
+      assert File.exist?(controller.api_dump_path)
+      contents = File.read(controller.api_dump_path)
+      assert_includes contents, 'api_dump_start'
+      assert_includes contents, 'agent: coder'
+      assert_includes contents, 'model: gpt-4o-mini'
+      assert_includes contents, "path: #{controller.api_dump_path}"
+
+      controller.shutdown_session
+    end
+  end
+
   def test_select_agent_switches_session
     controller = ChatApp::SessionController.new(
       api_key: 'fake_key',

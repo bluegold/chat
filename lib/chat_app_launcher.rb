@@ -52,8 +52,8 @@ module ChatAppLauncher
     abort 'Error: OPENAI_API_KEY environment variable is not set'
   end
 
-  def resolve_agent_registry(env)
-    ChatBackend::AgentRegistry.load(path: ChatBackend::AgentRegistry.default_path(env), env: env)
+  def resolve_agent_registry(env, cwd: Dir.pwd)
+    ChatBackend::AgentRegistry.load(path: ChatBackend::AgentRegistry.default_path(env), env: env, cwd: cwd)
   end
 
   def resolve_agent_name(env, registry)
